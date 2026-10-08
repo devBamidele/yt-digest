@@ -10,8 +10,11 @@ export interface ClockTime {
   minute: number;
 }
 
-/** "18", "6pm", "22:30", "7:15am", "22.30" → a time on the 5-minute grid; `rounded` if we moved it. */
-export function parseTime(text: string): (ClockTime & { rounded: boolean }) | null {
+/**
+ * "18", "6pm", "22:30", "7:15am", "22.30" → a time on the 5-minute grid; `rounded` if we moved it.
+ * `ambiguous` when it could be morning or evening ("11:00", "7"): 1-12 with no am/pm and no leading zero.
+ */
+export function parseTime(text: string): (ClockTime & { rounded: boolean; ambiguous: boolean }) | null {
   const m = text.trim().toLowerCase().replace(/\s+/g, "").match(/^(\d{1,2})(?:[:.h](\d{2}))?(am|pm)?$/);
   if (!m) return null;
   let hour = Number(m[1]);
@@ -22,7 +25,8 @@ export function parseTime(text: string): (ClockTime & { rounded: boolean }) | nu
   if (hour > 23 || (m[3] && Number(m[1]) > 12)) return null;
   let total = Math.round((hour * 60 + typedMinute) / STEP_MINUTES) * STEP_MINUTES;
   total %= 24 * 60; // 23:58 rounds to 00:00
-  return { hour: Math.floor(total / 60), minute: total % 60, rounded: total !== (hour * 60 + typedMinute) % (24 * 60) };
+  const ambiguous = !m[3] && hour >= 1 && hour <= 12 && !m[1].startsWith("0");
+  return { hour: Math.floor(total / 60), minute: total % 60, rounded: total !== (hour * 60 + typedMinute) % (24 * 60), ambiguous };
 }
 
 export const fmtTime = (hour: number, minute = 0) => `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
@@ -53,12 +57,24 @@ interface Schedule {
   delivery_hour: number;
   delivery_minute: number;
   last_digest_at: string | null;
+  next_digest_at?: string | null; // one-off time from a message ("send it at 11:10pm", "now")
 }
+
+/** A one-off time is pending if it hasn't been delivered yet. */
+const oneOffPending = (u: Schedule) => !!u.next_digest_at && (!u.last_digest_at || u.last_digest_at < u.next_digest_at);
 
 const sentToday = (u: Schedule, at: Date) => u.last_digest_at !== null && localClock(new Date(u.last_digest_at), u.timezone).date === localClock(at, u.timezone).date;
 
-/** Due if it's at or just after their delivery time (within the catch-up window) and they haven't had today's. */
+/**
+ * Due if a one-off time from a message has come, or it's at or just after their daily time
+ * (within the catch-up window) and they haven't had today's digest.
+ */
 export function isDue(u: Schedule, at = new Date()): boolean {
+  if (oneOffPending(u)) {
+    const t = Date.parse(u.next_digest_at!);
+    if (at.getTime() >= t && at.getTime() < t + CATCH_UP_MINUTES * 60_000) return true;
+    if (at.getTime() < t) return false; // waiting for the one-off: it replaces today's usual time
+  }
   const now = localClock(at, u.timezone).minutes;
   const target = u.delivery_hour * 60 + u.delivery_minute;
   return now >= target && now < target + CATCH_UP_MINUTES && !sentToday(u, at);
@@ -66,10 +82,47 @@ export function isDue(u: Schedule, at = new Date()): boolean {
 
 /** "today at 10:30pm", "tomorrow at 6pm" or "in the next few minutes". */
 export function nextDigest(u: Schedule, at = new Date()): string {
+  if (oneOffPending(u)) {
+    const t = Date.parse(u.next_digest_at!);
+    if (at.getTime() >= t - 60_000) return "in the next few minutes";
+    const local = localClock(new Date(t), u.timezone);
+    const day = local.date === localClock(at, u.timezone).date ? "today" : "tomorrow";
+    return `${day} at ${friendlyTime(Math.floor(local.minutes / 60), local.minutes % 60)}`;
+  }
   const now = localClock(at, u.timezone).minutes;
   const target = u.delivery_hour * 60 + u.delivery_minute;
   const when = friendlyTime(u.delivery_hour, u.delivery_minute);
   if (isDue(u, at)) return "in the next few minutes";
   if (now < target && !sentToday(u, at)) return `today at ${when}`;
   return `tomorrow at ${when}`;
+}
+
+/**
+ * The UTC moment for a local time in a time zone, on the same local day as `at`, or the next day
+ * if that time has already passed by more than the catch-up window.
+ */
+export function nextOccurrence(t: ClockTime, timezone: string, at = new Date()): Date {
+  const target = t.hour * 60 + t.minute;
+  const now = localClock(at, timezone).minutes;
+  let deltaMin = target - now;
+  if (deltaMin < -CATCH_UP_MINUTES) deltaMin += 24 * 60; // e.g. "7am" said at 9pm → tomorrow
+  const d = new Date(at.getTime() + deltaMin * 60_000);
+  d.setUTCSeconds(0, 0);
+  return d;
+}
+
+/** For an ambiguous "11:00": the morning and evening readings, as button labels and "H:M" values. */
+export function amPmChoices(t: ClockTime): { label: string; value: string }[] {
+  const am = t.hour % 12;
+  const pm = am + 12;
+  return [
+    { label: `🌅 ${fmtTime(am, t.minute)} (${friendlyTime(am, t.minute)})`, value: `${am}:${t.minute}` },
+    { label: `🌙 ${fmtTime(pm, t.minute)} (${friendlyTime(pm, t.minute)})`, value: `${pm}:${t.minute}` },
+  ];
+}
+
+/** "18" or "18:30" from a button → a time. */
+export function parseChoice(value: string): ClockTime | null {
+  const [h, m = 0] = value.split(":").map(Number);
+  return Number.isInteger(h) && h >= 0 && h <= 23 && Number.isInteger(m) && m >= 0 && m <= 59 ? { hour: h, minute: m } : null;
 }

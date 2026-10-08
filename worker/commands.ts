@@ -4,7 +4,7 @@
 import * as db from "./db.ts";
 import { connectLink } from "./google.ts";
 import { MIXES, parseTimezone, type OnboardingCtx } from "./onboarding.ts";
-import { fmtTime, nextDigest, parseTime } from "./time.ts";
+import { amPmChoices, fmtTime, nextDigest, parseChoice, parseTime, type ClockTime } from "./time.ts";
 
 export const COMMANDS: [string, string][] = [
   ["settings", "Change watch time, mix, delivery time, time zone or interests"],
@@ -128,6 +128,11 @@ export async function handleSettingsCallback(ctx: OnboardingCtx, u: db.User, dat
     }
     return false;
   }
+  if (field === "time") {
+    const t = parseChoice(value);
+    if (t) await setDeliveryTime(ctx, u, t);
+    return true;
+  }
   if (field === "budget" && Number(value) > 0) {
     await db.updateUser(ctx.db, chat, { budget_minutes: Number(value) });
     await send(ctx, chat, `✓ Watch time: ${value} min`);
@@ -141,6 +146,16 @@ export async function handleSettingsCallback(ctx: OnboardingCtx, u: db.User, dat
   return false;
 }
 
+async function setDeliveryTime(ctx: OnboardingCtx, u: db.User, t: ClockTime, rounded = false) {
+  await db.updateUser(ctx.db, u.chat_id, { delivery_hour: t.hour, delivery_minute: t.minute, step: "done" });
+  const updated = { ...u, delivery_hour: t.hour, delivery_minute: t.minute };
+  await send(
+    ctx,
+    u.chat_id,
+    `✓ Delivery time: ${fmtTime(t.hour, t.minute)} (${u.timezone})${rounded ? " (I deliver in 5-minute steps)" : ""}. Next digest ${nextDigest(updated)}.`,
+  );
+}
+
 /** Typed replies to /settings questions (time, time zone, interests). Returns true if handled. */
 export async function handleSettingInput(ctx: OnboardingCtx, u: db.User, text: string): Promise<boolean> {
   const chat = u.chat_id;
@@ -151,13 +166,11 @@ export async function handleSettingInput(ctx: OnboardingCtx, u: db.User, text: s
         await send(ctx, chat, 'I didn\'t catch that time. Try e.g. "8am", "7:30pm" or "22:30".');
         return true;
       }
-      await db.updateUser(ctx.db, chat, { delivery_hour: t.hour, delivery_minute: t.minute, step: "done" });
-      const updated = { ...u, delivery_hour: t.hour, delivery_minute: t.minute };
-      await send(
-        ctx,
-        chat,
-        `✓ Delivery time: ${fmtTime(t.hour, t.minute)} (${u.timezone})${t.rounded ? " (I deliver in 5-minute steps)" : ""}. Next digest ${nextDigest(updated)}.`,
-      );
+      if (t.ambiguous) {
+        await send(ctx, chat, "Morning or evening?", [amPmChoices(t).map((c) => btn(c.label, `set|time|${c.value}`))]);
+        return true;
+      }
+      await setDeliveryTime(ctx, u, t, t.rounded);
       return true;
     }
     case "set_timezone": {

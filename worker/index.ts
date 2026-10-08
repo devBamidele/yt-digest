@@ -9,7 +9,7 @@ import * as db from "./db.ts";
 import { authUrl, exchangeCode, mySubscriptions, randomToken, SubsError, verifyConnect } from "./google.ts";
 import { handleCommand, handleSettingInput, handleSettingsCallback } from "./commands.ts";
 import { handleOnboarding, importCsvDocument, importedFromGoogle, prompt, type OnboardingCtx } from "./onboarding.ts";
-import { friendlyTime } from "./time.ts";
+import { fmtTime, friendlyTime, localClock, nextDigest, nextOccurrence } from "./time.ts";
 
 interface Env {
   DB: db.D1;
@@ -113,7 +113,43 @@ async function handleActive(env: Env, user: db.User, update: any, ctx: Onboardin
   if (user.step.startsWith("set_") && (await handleSettingInput(ctx, user, m.text))) return;
   const at = new Date(m.date * 1000).toISOString();
   await db.addRequest(env.DB, user.chat_id, m.text, at);
-  await replyToMessage(env, user.chat_id, m.text, at, whenNext(new Date(), user.timezone, user.delivery_hour, user.delivery_minute));
+  await handleRequest(env, user, m.text, at);
+}
+
+/** Reads a request right away: applies delivery-time changes and says exactly what will happen. */
+async function handleRequest(env: Env, user: db.User, text: string, at: string) {
+  const chat_id = user.chat_id;
+  const now = new Date();
+  const local = localClock(now, user.timezone);
+  const localNow = `${local.date} ${fmtTime(Math.floor(local.minutes / 60), local.minutes % 60)} (${user.timezone}); usual digest time ${fmtTime(user.delivery_hour, user.delivery_minute)}`;
+  let reply: string;
+  try {
+    process.env.ANTHROPIC_API_KEY = env.ANTHROPIC_API_KEY;
+    const r = await parseRequests([{ text, at }], env.AI_MODEL, { localNow });
+    let u = user;
+    const lines: string[] = [];
+    if (r.daily_time) {
+      const [h, mi] = r.daily_time.split(":").map(Number);
+      await db.updateUser(env.DB, chat_id, { delivery_hour: h, delivery_minute: mi - (mi % 5) });
+      u = { ...u, delivery_hour: h, delivery_minute: mi - (mi % 5) };
+      lines.push(`Your everyday time is now <b>${fmtTime(h, mi - (mi % 5))}</b>.`);
+    }
+    if (r.deliver_at) {
+      const when = r.deliver_at === "now" ? now : nextOccurrence({ hour: Number(r.deliver_at.slice(0, 2)), minute: Number(r.deliver_at.slice(3)) }, user.timezone, now);
+      await db.updateUser(env.DB, chat_id, { next_digest_at: when.toISOString() });
+      u = { ...u, next_digest_at: when.toISOString() };
+    }
+    if (r.skip_today) reply = `👌 Okay, I'll skip your next digest.`;
+    else if (r.summary || r.daily_time || r.deliver_at) {
+      reply = [`✅ Got it${r.summary ? `: <b>${escape(r.summary)}</b>` : ""}.`, ...lines, `Your next digest arrives ${nextDigest(u)}.`].join("\n");
+    } else {
+      reply = "👋 Noted. To change your next digest, tell me the time, the mix or topics, e.g. <i>“45 min, only shorts, something funny, at 9pm”</i>.";
+    }
+  } catch (e) {
+    console.log(`request parse failed: ${(e as Error).message}`);
+    reply = `✅ Got it. I'll use this for your next digest (${nextDigest(user)}).`;
+  }
+  await telegram(env, "sendMessage", { chat_id, text: reply, parse_mode: "HTML" });
 }
 
 async function handleUpdate(env: Env, update: any, origin: string) {
@@ -170,17 +206,29 @@ async function oauthStart(env: Env, url: URL): Promise<Response> {
   return Response.redirect(await authUrl(env.GOOGLE_WEB_CLIENT_ID, `${url.origin}/oauth/callback`, state, verifier), 302);
 }
 
-/** /oauth/callback: Google sends the person back here; read their subscriptions once and continue in Telegram. */
-async function oauthCallback(env: Env, url: URL): Promise<Response> {
+/**
+ * /oauth/callback: Google sends the person back here. Browsers often load this page twice (the first
+ * load cancelled), so the browser gets an answer straight away and the import runs in the background,
+ * where a cancelled load can't cut it off. Only the load that claims the one-time state does the work.
+ */
+function oauthCallback(env: Env, url: URL, ctx: { waitUntil(p: Promise<unknown>): void }): Response {
+  ctx.waitUntil(
+    importSubscriptions(env, url).catch((e) => console.log(`oauth import failed: ${(e as Error).stack ?? e}`)),
+  );
+  if (url.searchParams.get("error")) return page("Sign-in cancelled", "You can close this tab and go back to Telegram.");
+  return page("✅ Signed in", "Go back to Telegram: I'll confirm your channels there in a few seconds.");
+}
+
+async function importSubscriptions(env: Env, url: URL): Promise<void> {
   const saved = await db.takeOAuthState(env.DB, url.searchParams.get("state") ?? "");
   if (!saved) {
-    // Usually the browser reloading a page that already worked.
-    return page("Already done", "This sign-in was already used. Go back to Telegram: if the bot hasn't moved on to the next step, tap Connect YouTube again.");
+    console.log("oauth callback: state already used or expired (duplicate load)");
+    return;
   }
   const chat_id = saved.chat_id;
   if (url.searchParams.get("error")) {
     await telegram(env, "sendMessage", { chat_id, text: "Google sign-in was cancelled. Tap Connect YouTube to try again, or use one of the other options." });
-    return page("Sign-in cancelled", "You can close this tab and go back to Telegram.");
+    return;
   }
   try {
     const token = await exchangeCode({
@@ -192,11 +240,10 @@ async function oauthCallback(env: Env, url: URL): Promise<Response> {
     });
     const subs = await mySubscriptions(token);
     await importedFromGoogle(onboardingCtx(env, url.origin), chat_id, subs);
-    return page(`✅ Found ${subs.length} channels`, "All done here. Go back to Telegram to finish setting up.");
   } catch (e) {
+    console.log(`oauth import error: ${(e as Error).message}`);
     const msg = e instanceof SubsError ? e.message : "Something went wrong talking to Google.";
     await telegram(env, "sendMessage", { chat_id, text: `${msg} Try Connect YouTube again, or send your Takeout file instead.` });
-    return page("Couldn't read your subscriptions", `${escape(msg)} Go back to Telegram for other options.`, 502);
   }
 }
 
@@ -240,7 +287,7 @@ export default {
 
     if (url.pathname.startsWith("/api/")) return handleApi(request, env);
     if (request.method === "GET" && url.pathname === "/oauth/start") return oauthStart(env, url);
-    if (request.method === "GET" && url.pathname === "/oauth/callback") return oauthCallback(env, url);
+    if (request.method === "GET" && url.pathname === "/oauth/callback") return oauthCallback(env, url, ctx);
 
     return new Response("yt-digest bot", { status: 200 });
   },

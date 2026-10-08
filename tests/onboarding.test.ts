@@ -236,3 +236,63 @@ test("/delete asks first, then erases everything", async () => {
   await msg("200", "hello?");
   assert.match(lastText(), /invite-only/);
 });
+
+test("ambiguous times ask morning or evening; leading zero and 24h times don't", async () => {
+  const amb = (s: string) => parseTime(s)?.ambiguous;
+  assert.equal(amb("11:00"), true);
+  assert.equal(amb("7"), true);
+  assert.equal(amb("07:00"), false);
+  assert.equal(amb("23:00"), false);
+  assert.equal(amb("11pm"), false);
+
+  const code = await db.createInvite(env.DB, "1");
+  await msg("600", `/start ${code}`);
+  await importedFromGoogle({ db: env.DB, tg: async (m, b) => void sent.push({ method: m, body: b }), origin: "https://bot.example", secret: "hook", youtubeApiKey: "", botToken: "t" }, "600", [{ id: "UCa", name: "A" }]);
+  await tap("600", "ob|budget|30");
+  await tap("600", "ob|mix|balanced");
+  sent = [];
+  await msg("600", "11:00");
+  const q = sent.at(-1)!.body;
+  assert.equal(q.text, "Morning or evening?");
+  assert.deepEqual(q.reply_markup.inline_keyboard[0].map((b: any) => b.callback_data), ["ob|hour|11:0", "ob|hour|23:0"]);
+  assert.equal((await db.getUser(env.DB, "600"))!.step, "hour"); // still waiting for the answer
+  await tap("600", "ob|hour|23:0");
+  const u = (await db.getUser(env.DB, "600"))!;
+  assert.deepEqual([u.delivery_hour, u.delivery_minute, u.step], [23, 0, "timezone"]);
+});
+
+test("one-off delivery times: due at that moment, once, replacing the usual time until then", async () => {
+  const { nextOccurrence } = await import("../worker/time.ts");
+  const lagos = (s: string) => new Date(`2026-10-09T${s}:00+01:00`);
+  const at = nextOccurrence({ hour: 23, minute: 10 }, "Africa/Lagos", lagos("23:04"));
+  assert.equal(at.toISOString(), "2026-10-09T22:10:00.000Z");
+  assert.equal(nextOccurrence({ hour: 7, minute: 0 }, "Africa/Lagos", lagos("21:00")).toISOString(), "2026-10-10T06:00:00.000Z"); // tomorrow
+  const u = { timezone: "Africa/Lagos", delivery_hour: 11, delivery_minute: 0, last_digest_at: null as string | null, next_digest_at: at.toISOString() };
+  assert.equal(isDue(u, lagos("23:05")), false);
+  assert.equal(isDue(u, lagos("23:10")), true);
+  assert.equal(nextDigest(u, lagos("23:04")), "today at 11:10pm");
+  assert.equal(isDue({ ...u, last_digest_at: lagos("23:11").toISOString() }, lagos("23:15")), false); // delivered once
+});
+
+test("the one-time sign-in state can be claimed only once, even by simultaneous loads", async () => {
+  await db.putOAuthState(env.DB, "race", "600", "ver");
+  const [a, b] = await Promise.all([db.takeOAuthState(env.DB, "race"), db.takeOAuthState(env.DB, "race")]);
+  assert.equal([a, b].filter(Boolean).length, 1);
+});
+
+test("sign-in callback answers the browser at once and imports in the background", async () => {
+  await db.putOAuthState(env.DB, "st2", "600", "ver");
+  const pending: Promise<unknown>[] = [];
+  const res = await worker.fetch(new Request("https://bot.example/oauth/callback?state=st2&error=access_denied"), env, { waitUntil: (p) => void pending.push(p) });
+  assert.equal(res.status, 200);
+  assert.match(await res.text(), /Sign-in cancelled/);
+  sent = [];
+  await Promise.all(pending);
+  assert.match(lastText(), /Google sign-in was cancelled/);
+  // A second (duplicate) load does nothing in the background.
+  const pending2: Promise<unknown>[] = [];
+  await worker.fetch(new Request("https://bot.example/oauth/callback?state=st2&error=access_denied"), env, { waitUntil: (p) => void pending2.push(p) });
+  sent = [];
+  await Promise.all(pending2);
+  assert.equal(sent.length, 0);
+});

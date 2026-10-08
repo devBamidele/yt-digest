@@ -31,6 +31,7 @@ export interface User {
   is_owner: number;
   created_at: string;
   last_digest_at: string | null;
+  next_digest_at: string | null;
 }
 
 export const SENT_KEEP_DAYS = 30;
@@ -51,7 +52,7 @@ export async function createUser(db: D1, chatId: string, name: string, isOwner =
   return (await getUser(db, chatId))!;
 }
 
-const USER_FIELDS = ["name", "status", "step", "timezone", "delivery_hour", "delivery_minute", "budget_minutes", "shorts_ratio"] as const;
+const USER_FIELDS = ["name", "status", "step", "timezone", "delivery_hour", "delivery_minute", "budget_minutes", "shorts_ratio", "next_digest_at"] as const;
 export async function updateUser(db: D1, chatId: string, fields: Partial<Pick<User, (typeof USER_FIELDS)[number]>>) {
   const keys = USER_FIELDS.filter((k) => fields[k] !== undefined);
   if (!keys.length) return;
@@ -244,10 +245,15 @@ export async function putOAuthState(db: D1, state: string, chatId: string, verif
   ]);
 }
 
-/** One-time use: returns and deletes the state if it exists and hasn't expired. */
+/**
+ * One-time use: deletes the state and returns it, in a single statement, so two simultaneous
+ * loads of the callback (browsers do this) can never both get it. Null if missing or expired.
+ */
 export async function takeOAuthState(db: D1, state: string) {
-  const row = await db.prepare("SELECT chat_id, verifier, created_at FROM oauth_states WHERE state = ?").bind(state).first<{ chat_id: string; verifier: string; created_at: string }>();
-  await db.prepare("DELETE FROM oauth_states WHERE state = ?").bind(state).run();
+  const row = await db
+    .prepare("DELETE FROM oauth_states WHERE state = ? RETURNING chat_id, verifier, created_at")
+    .bind(state)
+    .first<{ chat_id: string; verifier: string; created_at: string }>();
   if (!row || Date.now() - Date.parse(row.created_at) > OAUTH_STATE_MINUTES * 60_000) return null;
   return row;
 }

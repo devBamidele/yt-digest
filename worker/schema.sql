@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS users (
   shorts_ratio REAL NOT NULL DEFAULT 0.4,
   is_owner INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
-  last_digest_at TEXT                         -- taps after this count as "since the last digest"
+  last_digest_at TEXT,                        -- taps after this count as "since the last digest"
+  next_digest_at TEXT                         -- one-off delivery time from a message (UTC), if any
 );
 
 CREATE TABLE IF NOT EXISTS invites (

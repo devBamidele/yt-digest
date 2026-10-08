@@ -3,7 +3,7 @@
 import { subsFromCsv, type Sub } from "../src/subs.ts";
 import * as db from "./db.ts";
 import { connectLink, SubsError, subscriptionsForHandle } from "./google.ts";
-import { fmtTime, nextDigest, parseTime } from "./time.ts";
+import { amPmChoices, fmtTime, nextDigest, parseChoice, parseTime } from "./time.ts";
 
 export type Tg = (method: string, payload: Record<string, unknown>) => Promise<any>;
 
@@ -188,7 +188,11 @@ export async function handleOnboarding(ctx: OnboardingCtx, user: db.User, update
     if (field !== user.step && !(field === "tz" && user.step === "timezone")) return; // an old button
     if (field === "budget") await db.updateUser(ctx.db, chatId, { budget_minutes: Number(value) });
     else if (field === "mix" && MIXES[value]) await db.updateUser(ctx.db, chatId, { shorts_ratio: MIXES[value].ratio });
-    else if (field === "hour") await db.updateUser(ctx.db, chatId, { delivery_hour: Number(value), delivery_minute: 0 });
+    else if (field === "hour") {
+      const t = parseChoice(value);
+      if (!t) return;
+      await db.updateUser(ctx.db, chatId, { delivery_hour: t.hour, delivery_minute: t.minute });
+    }
     else if (field === "tz" && validZone(value)) await db.updateUser(ctx.db, chatId, { timezone: value });
     else if (field !== "taste") return;
     await advance(ctx, chatId, user.step);
@@ -215,6 +219,14 @@ export async function handleOnboarding(ctx: OnboardingCtx, user: db.User, update
     case "hour": {
       const t = parseTime(text);
       if (!t) return void (await reply('I didn\'t catch that time. Try e.g. "8am", "7:30pm" or "22:30".'));
+      if (t.ambiguous) {
+        await ctx.tg("sendMessage", {
+          chat_id: chatId,
+          text: "Morning or evening?",
+          reply_markup: { inline_keyboard: [amPmChoices(t).map((c) => btn(c.label, `hour|${c.value}`))] },
+        });
+        return;
+      }
       await db.updateUser(ctx.db, chatId, { delivery_hour: t.hour, delivery_minute: t.minute });
       if (t.rounded) await reply(`I deliver in 5-minute steps, so I'll use <b>${fmtTime(t.hour, t.minute)}</b>.`);
       return advance(ctx, chatId, "hour");
