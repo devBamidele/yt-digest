@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { escapeHtml, formatDigest, keyboard } from "../src/deliver.ts";
+import { deliver, escapeHtml, formatDigest, keyboard } from "../src/deliver.ts";
 import { parseCallback } from "../src/feedback.ts";
 import type { Selection } from "../src/select.ts";
 import type { Video } from "../src/types.ts";
@@ -14,42 +14,42 @@ const sel = (picked: Video[], note?: string): Selection => ({
   totalSeconds: picked.reduce((a, v) => a + v.durationSeconds!, 0),
 });
 
-test("digest has sections, links, summaries and the total at the bottom", () => {
-  const picked = [vid(1, "long"), vid(2, "short")];
-  const [{ text: msg }] = formatDigest(sel(picked), picked, 60, "Thu 8 Oct");
-  assert.match(msg, /^📺 <b>Your YouTube digest<\/b> · Thu 8 Oct · 60 min/);
-  assert.ok(msg.indexOf("🎬") < msg.indexOf("⚡"), "videos before shorts");
-  assert.match(msg, /<a href="https:\/\/youtu.be\/id1">Title 1<\/a>/);
-  assert.match(msg, /Creator 2 · 0:45\nSummary 2\./);
-  assert.match(msg, /⏱ <b>Total: 10:45 of 60 min<\/b> · 1 videos \(10:00\) \+ 1 shorts \(0:45\)\n/);
+test("header, one message per video (long-form first) with its own buttons, then the total", () => {
+  const picked = [vid(2, "short"), vid(1, "long")];
+  const msgs = formatDigest(sel(picked), picked, 60, "Thu 8 Oct");
+  assert.equal(msgs.length, 4);
+  assert.match(msgs[0].text, /^📺 <b>Your YouTube digest<\/b> · Thu 8 Oct · 60 min\n🎬 1 videos \(10:00\) · ⚡ 1 shorts \(0:45\)$/);
+  assert.equal(msgs[0].video, undefined);
+  assert.equal(msgs[1].video?.videoId, "id1");
+  assert.match(msgs[1].text, /^🎬 <b>1\. <a href="https:\/\/youtu.be\/id1">Title 1<\/a><\/b>\nCreator 1 · 10:00\nSummary 1\.$/);
+  assert.match(msgs[2].text, /^⚡ <b>2\./);
+  assert.match(msgs[3].text, /^⏱ <b>Total: 10:45 of 60 min<\/b>/);
+  assert.equal(msgs[3].video, undefined);
 });
 
 test("titles are HTML-escaped so Telegram doesn't reject the message", () => {
   assert.equal(escapeHtml(`Tom & Jerry <3 "hi"`), `Tom &amp; Jerry &lt;3 "hi"`);
   const picked = [vid(1, "long", { title: "A <b> & C" })];
-  assert.match(formatDigest(sel(picked), picked, 60, "d")[0].text, /A &lt;b&gt; &amp; C/);
+  assert.match(formatDigest(sel(picked), picked, 60, "d")[1].text, /A &lt;b&gt; &amp; C/);
 });
 
-test("long digests split into messages under Telegram's 4096-char limit, keeping every item", () => {
-  const picked = Array.from({ length: 60 }, (_, i) => vid(i, i % 2 ? "short" : "long", { summary: "x".repeat(200) }));
+test("every message fits Telegram's 4096-char limit", () => {
+  const picked = Array.from({ length: 60 }, (_, i) => vid(i, i % 2 ? "short" : "long", { title: "t".repeat(100), summary: "x".repeat(400) }));
   const msgs = formatDigest(sel(picked), picked, 120, "d");
-  assert.ok(msgs.length > 1);
-  for (const m of msgs) assert.ok(m.text.length <= 4096, `message is ${m.text.length} chars`);
-  for (const v of picked) assert.ok(msgs.some((m) => m.text.includes(`youtu.be/${v.videoId}"`)));
-  assert.match(msgs.at(-1)!.text, /⏱ <b>Total/);
-  // Every video gets buttons, on the same message that lists it.
-  assert.equal(msgs.reduce((a, m) => a + m.items.length, 0), 60);
-  for (const m of msgs) for (const { video } of m.items) assert.ok(m.text.includes(`youtu.be/${video.videoId}"`));
+  assert.equal(msgs.length, 62);
+  for (const m of msgs) assert.ok(m.text.length <= 4096);
 });
 
-test("empty day sends the note", () => {
-  assert.match(formatDigest(sel([], "No new videos today."), [], 60, "d")[0].text, /No new videos today\./);
+test("empty day sends just the note", () => {
+  const msgs = formatDigest(sel([], "No new videos today."), [], 60, "d");
+  assert.equal(msgs.length, 1);
+  assert.match(msgs[0].text, /No new videos today\./);
 });
 
-test("buttons: numbered 👍/👎 per video, 4 per row, payload fits Telegram's 64 bytes and round-trips", () => {
-  const picked = [1, 2, 3].map((i) => vid(i, "long", { videoId: `abcdefghij${i}`, channelId: "UCsBjURrPoezykLs9EqgamOA" }));
-  const kb = keyboard(picked.map((video, i) => ({ n: i + 1, video })));
-  assert.deepEqual(kb.inline_keyboard.map((r) => r.map((b) => b.text)), [["1 👍", "1 👎", "2 👍", "2 👎"], ["3 👍", "3 👎"]]);
+test("buttons: one 👍/👎 row per video, payload fits Telegram's 64 bytes and round-trips", () => {
+  const v = vid(1, "long", { videoId: "abcdefghij1", channelId: "UCsBjURrPoezykLs9EqgamOA" });
+  const kb = keyboard(v);
+  assert.deepEqual(kb.inline_keyboard.map((r) => r.map((b) => b.text)), [["👍", "👎"]]);
   const data = kb.inline_keyboard[0][1].callback_data;
   assert.ok(Buffer.byteLength(data) <= 64);
   assert.deepEqual(parseCallback(data), { vote: "down", videoId: "abcdefghij1", channelId: "UCsBjURrPoezykLs9EqgamOA" });
@@ -58,4 +58,29 @@ test("buttons: numbered 👍/👎 per video, 4 per row, payload fits Telegram's 
 test("feedback line shows under the header", () => {
   const picked = [vid(1, "long")];
   assert.match(formatDigest(sel(picked), picked, 60, "d", "Got your feedback: 2 👍, 1 👎")[0].text, /<i>Got your feedback: 2 👍, 1 👎<\/i>/);
+});
+
+test("delivery marks each video as soon as its message is sent, and stops at a failure", async () => {
+  const picked = [vid(1, "long"), vid(2, "long"), vid(3, "long")];
+  const msgs = formatDigest(sel(picked), picked, 60, "d");
+  process.env.TELEGRAM_BOT_TOKEN = "t";
+  process.env.TELEGRAM_CHAT_ID = "1";
+  const realFetch = globalThis.fetch;
+  const sent: any[] = [];
+  globalThis.fetch = (async (_url: string, init: any) => {
+    const body = JSON.parse(init.body);
+    sent.push(body);
+    const fail = body.text.includes("Title 2");
+    return { status: fail ? 400 : 200, json: async () => (fail ? { ok: false, description: "boom" } : { ok: true }) };
+  }) as any;
+  const delivered: string[] = [];
+  try {
+    await assert.rejects(deliver(msgs, (v) => delivered.push(v.videoId)), /boom/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.deepEqual(delivered, ["id1"]); // id2 failed, id3 never sent: both stay eligible tomorrow
+  assert.equal(sent[0].disable_notification, false); // header notifies
+  assert.equal(sent[1].disable_notification, true); // the rest are silent
+  assert.ok(sent[1].reply_markup.inline_keyboard);
 });

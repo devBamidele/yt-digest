@@ -107,13 +107,18 @@ const messages = formatDigest(sel, picked, cfg.budgetMinutes, day, feedbackLine)
 let delivery: string;
 if (values["dry-run"]) {
   console.log(`\n--- Telegram preview (${messages.length} message${messages.length > 1 ? "s" : ""}, not sent) ---`);
-  for (const m of messages) console.log(`${m.text}\n[${m.items.length * 2} 👍/👎 buttons]\n---`);
+  for (const m of messages) console.log(`${m.text}${m.video ? "\n[👍] [👎]" : ""}\n---`);
   delivery = "dry-run";
 } else {
-  await deliver(messages);
-  saveSent(markSent(picked, sent));
+  // Mark each video as sent as soon as its own message goes through, even if a later one fails.
+  const delivered: typeof picked = [];
+  try {
+    await deliver(messages, (v) => delivered.push(v));
+  } finally {
+    saveSent(markSent(delivered, sent));
+  }
   delivery = `sent ${messages.length} message(s)`;
-  console.log(`\n✓ Sent to Telegram (${messages.length} message${messages.length > 1 ? "s" : ""}); ${picked.length} videos marked as sent`);
+  console.log(`\n✓ Sent to Telegram (${messages.length} messages); ${delivered.length} videos marked as sent`);
 }
 
 const logPath = writeRunLog({
