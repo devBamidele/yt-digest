@@ -12,10 +12,9 @@ try {
   process.loadEnvFile();
 } catch {}
 
-interface Sub {
-  id: string;
-  name: string;
-}
+import { subsFromCsv, type Sub } from "./subs.ts";
+
+export { subsFromCsv };
 
 const API_URL = "https://www.googleapis.com/youtube/v3/";
 
@@ -77,16 +76,6 @@ async function listSubs(filter: Record<string, string>, accessToken?: string): P
     pageToken = page.nextPageToken ?? "";
   } while (pageToken);
   return subs;
-}
-
-/** Google Takeout subscriptions.csv: "Channel Id,Channel Url,Channel Title". */
-export function subsFromCsv(text: string): Sub[] {
-  return text
-    .split(/\r?\n/)
-    .slice(1)
-    .map((line) => line.match(/^(UC[\w-]{22}),[^,]*,(.*)$/))
-    .filter((m): m is RegExpMatchArray => m !== null)
-    .map((m) => ({ id: m[1], name: m[2].trim().replace(/^"|"$/g, "").replace(/""/g, '"').trim() }));
 }
 
 /**
