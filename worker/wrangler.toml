@@ -6,6 +6,11 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 AI_MODEL = "claude-opus-5-5"
+GITHUB_REPO = "devBamidele/yt-digest"
+
+# Every hour on the hour: start the GitHub run for whoever's delivery hour it is.
+[triggers]
+crons = ["0 * * * *"]
 
 # Created with: npx wrangler kv namespace create EVENTS
 [[kv_namespaces]]
@@ -13,7 +18,8 @@ binding = "EVENTS"
 id = "5e1f8311120941f0b46f3ffa25e53642"
 
 # Secrets (set with `npx wrangler secret put NAME`, never committed):
-# TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ANTHROPIC_API_KEY, WEBHOOK_SECRET, EVENTS_TOKEN
+# TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ANTHROPIC_API_KEY, WEBHOOK_SECRET, EVENTS_TOKEN,
+# GOOGLE_WEB_CLIENT_ID, GOOGLE_WEB_CLIENT_SECRET, YOUTUBE_API_KEY, GH_DISPATCH_TOKEN
 
 # Per-user data (v3). Created with: npx wrangler d1 create yt_digest
 [[d1_databases]]

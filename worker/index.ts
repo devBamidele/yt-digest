@@ -26,6 +26,8 @@ interface Env {
   WEBHOOK_SECRET: string; // Telegram sends it back in a header, so only Telegram can post updates
   EVENTS_TOKEN: string; // the GitHub run's key for reading stored updates
   AI_MODEL: string;
+  GITHUB_REPO: string; // owner/name
+  GH_DISPATCH_TOKEN: string; // fine-grained token: Actions read & write on this repo only
 }
 
 const KEEP_SECONDS = 30 * 24 * 3600;
@@ -216,7 +218,30 @@ async function listUpdates(env: Env, after: number) {
   return values.filter((v): v is string => v !== null).map((v) => JSON.parse(v));
 }
 
+/** Hourly cron: if anyone's delivery hour has come, start the GitHub run for that exact moment. */
+export async function hourly(env: Env, scheduledTime: number): Promise<string> {
+  const at = new Date(scheduledTime);
+  const due = await db.dueUsers(env.DB, at);
+  if (!due.length) return "nobody due";
+  const res = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/users.yml/dispatches`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.GH_DISPATCH_TOKEN}`,
+      Accept: "application/vnd.github+json",
+      "User-Agent": "yt-digest-bot",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    body: JSON.stringify({ ref: "main", inputs: { at: at.toISOString() } }),
+  });
+  if (!res.ok) throw new Error(`GitHub dispatch failed: ${res.status} ${await res.text()}`);
+  return `started run for ${due.length} user(s)`;
+}
+
 export default {
+  async scheduled(event: { scheduledTime: number }, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }) {
+    ctx.waitUntil(hourly(env, event.scheduledTime).then((r) => console.log(`hourly: ${r}`), (e) => console.log(`hourly failed: ${e}`)));
+  },
+
   async fetch(request: Request, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }): Promise<Response> {
     const url = new URL(request.url);
 

@@ -1,0 +1,61 @@
+name: Digests (v3, per user)
+
+# Started by the receiver's hourly Cloudflare cron when someone's delivery hour has come,
+# with `at` = the cron's own timestamp, so a run that starts late still picks the same users.
+on:
+  workflow_dispatch:
+    inputs:
+      at:
+        description: "Moment to compute who is due (ISO time; blank = now)"
+        required: false
+      user:
+        description: "Run one user by chat id instead (testing)"
+        required: false
+      dry_run:
+        description: "Preview only: don't send"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read # no state in git any more: it lives in the receiver's database
+
+concurrency:
+  group: users
+  cancel-in-progress: false
+
+jobs:
+  digests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Tests
+        run: npm test
+      - name: Build and send digests
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          EVENTS_URL: ${{ secrets.EVENTS_URL }}
+          EVENTS_TOKEN: ${{ secrets.EVENTS_TOKEN }}
+          AT: ${{ inputs.at }}
+          ONE_USER: ${{ inputs.user }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=()
+          if [ -n "$ONE_USER" ]; then args+=(--user "$ONE_USER"); else args+=(--due); [ -n "$AT" ] && args+=(--at "$AT"); fi
+          [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
+          npm run digest:users -- "${args[@]}"
+      - name: Upload run logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 90
+          if-no-files-found: ignore
