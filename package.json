@@ -13,7 +13,8 @@
     "import-subs": "tsx src/import-subs.ts",
     "fixtures:collect": "tsx evals/collect-fixtures.ts",
     "eval:select": "tsx evals/eval-select.ts",
-    "eval:summaries": "tsx evals/eval-summaries.ts"
+    "eval:summaries": "tsx evals/eval-summaries.ts",
+    "feedback": "tsx src/feedback.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.132.1",

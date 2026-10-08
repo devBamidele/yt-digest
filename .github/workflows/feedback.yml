@@ -1,0 +1,41 @@
+name: Collect feedback
+
+# Telegram keeps button taps for only 24 hours. Collecting them at 06:00 Lagos as well as
+# at the 18:00 digest means no tap waits more than about 12 hours.
+on:
+  schedule:
+    - cron: "0 5 * * *" # 05:00 UTC = 06:00 in Lagos
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: digest # shared with the digest workflow, so the two never write state/ at once
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Collect 👍/👎 taps
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: npm run feedback
+      - name: Save state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/
+          git diff --cached --quiet && exit 0
+          git commit -m "Collect feedback ($(TZ=Africa/Lagos date +%F))"
+          for i in 1 2 3; do git pull --rebase && git push && exit 0; sleep 5; done
+          exit 1

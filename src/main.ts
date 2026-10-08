@@ -9,6 +9,7 @@ import { writeRunLog } from "./log.ts";
 import { loadSent, markSent, saveSent, unsent } from "./sent.ts";
 import { summarize } from "./summarize.ts";
 import { deliver, formatDigest } from "./deliver.ts";
+import { channelWeights, collectFeedback, loadFeedback } from "./feedback.ts";
 import { lagosDate } from "./log.ts";
 
 // Local runs read secrets from .env; in CI they come from the environment.
@@ -22,6 +23,7 @@ const HELP = `Usage: npm run digest -- [options]
   --hours <n>      look back this many hours for uploads (default: backlog_days from creators.yaml)
   --no-summaries   skip Claude summaries (free test runs)
   --dry-run        print the Telegram message instead of sending it (nothing is marked as sent)
+  --collect-feedback  also collect 👍/👎 taps on a local run (GitHub runs always do)
   --config <path>  config file (default: creators.yaml)
   --help           show this message`;
 
@@ -32,6 +34,7 @@ const { values } = parseArgs({
     config: { type: "string", default: "creators.yaml" },
     "no-summaries": { type: "boolean", default: false },
     "dry-run": { type: "boolean", default: false },
+    "collect-feedback": { type: "boolean", default: false },
     help: { type: "boolean", default: false },
   },
 });
@@ -49,6 +52,18 @@ console.log(
     `mix: ${Math.round(cfg.shortsRatio * 100)}% shorts / ${Math.round((1 - cfg.shortsRatio) * 100)}% long-form`,
 );
 
+// Collect 👍/👎 taps since the last run and turn them into per-channel weights.
+// Only GitHub runs collect: Telegram hands each tap out once, so a local run would take it from the repo's state.
+let feedback = { up: 0, down: 0 };
+if (process.env.GITHUB_ACTIONS || values["collect-feedback"]) {
+  try {
+    feedback = await collectFeedback();
+  } catch (e) {
+    console.log(`  ! couldn't collect feedback (${(e as Error).message}); using what's saved`);
+  }
+}
+const learned = channelWeights(loadFeedback());
+
 const hours = values.hours === undefined ? cfg.backlogDays * 24 : Number(values.hours);
 const since = new Date(Date.now() - hours * 3600_000);
 console.log(`\nFetching uploads since ${since.toISOString()}`);
@@ -60,6 +75,8 @@ videos = unsent(videos, sent);
 const alreadySent = fetched - videos.length;
 console.log(`${fetched} uploads, ${alreadySent} already sent, ${videos.length} candidates`);
 videos = await addStats(videos);
+// Your manual priority_weight × what your 👍/👎 taught it about this channel.
+videos = videos.map((v) => ({ ...v, priorityWeight: v.priorityWeight * (learned.get(v.channelId)?.weight ?? 1) }));
 videos = score(classify(videos, cfg.shortsMaxSeconds));
 const sel = select(videos, cfg.budgetMinutes, cfg.shortsRatio, cfg);
 
@@ -85,11 +102,12 @@ for (const v of sel.dropped.slice(0, 10)) console.log(`  ✗ ${v.creator} | ${v.
 
 // Step 7: deliver. Only a successful send marks videos as sent.
 const day = new Date().toLocaleDateString("en-GB", { timeZone: "Africa/Lagos", weekday: "short", day: "numeric", month: "short" });
-const messages = formatDigest(sel, picked, cfg.budgetMinutes, day);
+const feedbackLine = feedback.up + feedback.down ? `Got your feedback: ${feedback.up} 👍, ${feedback.down} 👎. Thanks!` : undefined;
+const messages = formatDigest(sel, picked, cfg.budgetMinutes, day, feedbackLine);
 let delivery: string;
 if (values["dry-run"]) {
   console.log(`\n--- Telegram preview (${messages.length} message${messages.length > 1 ? "s" : ""}, not sent) ---`);
-  for (const m of messages) console.log(`${m}\n---`);
+  for (const m of messages) console.log(`${m.text}\n[${m.items.length * 2} 👍/👎 buttons]\n---`);
   delivery = "dry-run";
 } else {
   await deliver(messages);
@@ -109,6 +127,8 @@ const logPath = writeRunLog({
   shortsBudgetSeconds: sel.shortsBudgetSeconds,
   totalSeconds: sel.totalSeconds,
   note: sel.note,
+  feedbackCollected: feedback,
+  learnedWeights: Object.fromEntries(learned),
   summaryModel: values["no-summaries"] ? null : cfg.summaryModel,
   summaryStats,
   delivery,

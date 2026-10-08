@@ -2,6 +2,7 @@
 //   npm run import-subs -- --login                 (sign in with Google; works when private)
 //   npm run import-subs -- @handle                 (subscriptions must be public)
 //   npm run import-subs -- --csv subscriptions.csv (Google Takeout export)
+// Add --sync to also remove channels you've unsubscribed from (their settings go with them).
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { parseDocument } from "yaml";
@@ -88,13 +89,33 @@ export function subsFromCsv(text: string): Sub[] {
     .map((m) => ({ id: m[1], name: m[2].trim().replace(/^"|"$/g, "").replace(/""/g, '"').trim() }));
 }
 
-/** Adds subs that aren't already in the config. Returns the updated YAML and how many were added. */
-export function mergeIntoConfig(yamlText: string, subs: Sub[]): { text: string; added: Sub[] } {
+/**
+ * Adds subs that aren't already in the config. With `sync`, also removes creators that are no
+ * longer in `subs`. Comments and other settings are kept.
+ */
+export function mergeIntoConfig(
+  yamlText: string,
+  subs: Sub[],
+  sync = false,
+): { text: string; added: Sub[]; removed: Sub[] } {
   const doc = parseDocument(yamlText);
-  const existing = new Set((doc.toJS().creators ?? []).map((c: { id: string }) => c.id));
+  const current: { id: string; name?: string }[] = doc.toJS().creators ?? [];
+  const existing = new Set(current.map((c) => c.id));
+  const subIds = new Set(subs.map((s) => s.id));
+
+  const removed: Sub[] = [];
+  if (sync) {
+    // Delete from the end so earlier indexes stay valid.
+    for (let i = current.length - 1; i >= 0; i--) {
+      if (!subIds.has(current[i].id)) {
+        removed.unshift({ id: current[i].id, name: current[i].name ?? current[i].id });
+        doc.deleteIn(["creators", i]);
+      }
+    }
+  }
   const added = subs.filter((s) => !existing.has(s.id));
   for (const s of added) doc.addIn(["creators"], doc.createNode({ id: s.id, name: s.name }));
-  return { text: doc.toString(), added };
+  return { text: doc.toString(), added, removed };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
@@ -102,6 +123,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     allowPositionals: true,
     options: {
       login: { type: "boolean", default: false },
+      sync: { type: "boolean", default: false },
       csv: { type: "string" },
       config: { type: "string", default: "creators.yaml" },
     },
@@ -117,10 +139,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       : values.csv
         ? subsFromCsv(readFileSync(values.csv, "utf8"))
         : await subsFromHandle(positionals[0]);
-    const { text, added } = mergeIntoConfig(readFileSync(values.config, "utf8"), subs);
-    if (added.length) writeFileSync(values.config, text);
-    console.log(`Found ${subs.length} subscriptions, added ${added.length} new to ${values.config}:`);
+    if (values.sync && subs.length === 0) throw new Error("Got 0 subscriptions; refusing to --sync (it would remove every creator)");
+    const { text, added, removed } = mergeIntoConfig(readFileSync(values.config, "utf8"), subs, values.sync);
+    if (added.length || removed.length) writeFileSync(values.config, text);
+    console.log(`Found ${subs.length} subscriptions: ${added.length} added, ${removed.length} removed (${values.config})`);
     for (const s of added) console.log(`  + ${s.name}`);
+    for (const s of removed) console.log(`  - ${s.name}`);
     if (subs.length === 0 && positionals.length) {
       console.log(
         "YouTube returned no subscriptions for this channel. They may be on a different channel of your " +
