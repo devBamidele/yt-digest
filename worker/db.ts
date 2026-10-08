@@ -1,3 +1,5 @@
+import { isDue } from "./time.ts";
+
 // Data layer over Cloudflare D1 (SQLite). Used by the receiver for onboarding and by the
 // /api routes the daily GitHub run calls. Every row is keyed by Telegram chat_id.
 
@@ -23,6 +25,7 @@ export interface User {
   step: string;
   timezone: string;
   delivery_hour: number;
+  delivery_minute: number;
   budget_minutes: number;
   shorts_ratio: number;
   is_owner: number;
@@ -48,7 +51,7 @@ export async function createUser(db: D1, chatId: string, name: string, isOwner =
   return (await getUser(db, chatId))!;
 }
 
-const USER_FIELDS = ["name", "status", "step", "timezone", "delivery_hour", "budget_minutes", "shorts_ratio"] as const;
+const USER_FIELDS = ["name", "status", "step", "timezone", "delivery_hour", "delivery_minute", "budget_minutes", "shorts_ratio"] as const;
 export async function updateUser(db: D1, chatId: string, fields: Partial<Pick<User, (typeof USER_FIELDS)[number]>>) {
   const keys = USER_FIELDS.filter((k) => fields[k] !== undefined);
   if (!keys.length) return;
@@ -134,16 +137,10 @@ export async function userState(db: D1, chatId: string) {
   };
 }
 
-/** Active users whose local delivery hour is now and who haven't had today's digest. */
+/** Active users whose local delivery time has just come (see time.ts) and who haven't had today's digest. */
 export async function dueUsers(db: D1, at = new Date()): Promise<User[]> {
   const users = (await db.prepare("SELECT * FROM users WHERE status = 'active'").all<User>()).results;
-  return users.filter((u) => {
-    const local = (d: Date, opts: Intl.DateTimeFormatOptions) => d.toLocaleString("en-CA", { timeZone: u.timezone, ...opts });
-    const hour = Number(local(at, { hour: "2-digit", hourCycle: "h23" }));
-    const today = local(at, { year: "numeric", month: "2-digit", day: "2-digit" });
-    const last = u.last_digest_at && local(new Date(u.last_digest_at), { year: "numeric", month: "2-digit", day: "2-digit" });
-    return hour === u.delivery_hour && last !== today;
-  });
+  return users.filter((u) => isDue(u, at));
 }
 
 /** After a digest goes out: record what was sent, use up the requests, stamp the time, add the cost. */

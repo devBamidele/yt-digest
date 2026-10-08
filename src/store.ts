@@ -7,6 +7,7 @@ export interface UserRow {
   status: string;
   timezone: string;
   delivery_hour: number;
+  delivery_minute: number;
   budget_minutes: number;
   shorts_ratio: number;
   is_owner: number;

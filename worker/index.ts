@@ -9,6 +9,7 @@ import * as db from "./db.ts";
 import { authUrl, exchangeCode, mySubscriptions, randomToken, SubsError, verifyConnect } from "./google.ts";
 import { handleCommand, handleSettingInput, handleSettingsCallback } from "./commands.ts";
 import { handleOnboarding, importCsvDocument, importedFromGoogle, prompt, type OnboardingCtx } from "./onboarding.ts";
+import { friendlyTime } from "./time.ts";
 
 interface Env {
   DB: db.D1;
@@ -37,16 +38,15 @@ async function telegram(env: Env, method: string, payload: Record<string, unknow
   return body;
 }
 
-const hourLabel = (h: number) => (h === 12 ? "12pm" : h === 0 ? "midnight" : h < 12 ? `${h}am` : `${h - 12}pm`);
-
 /** "tonight around 6pm" before the digest, "tomorrow around 6pm" after it, vaguer in between. */
-export function whenNext(now = new Date(), timezone = "Africa/Lagos", hour = 18): string {
+export function whenNext(now = new Date(), timezone = "Africa/Lagos", hour = 18, minute = 0): string {
   const [h, m] = now.toLocaleTimeString("en-GB", { timeZone: timezone, hour12: false }).split(":").map(Number);
   const minutes = h * 60 + m;
-  const at = hourLabel(hour);
+  const target = hour * 60 + minute;
+  const at = friendlyTime(hour, minute);
   const today = hour >= 17 ? "tonight" : "today";
-  if (minutes < hour * 60 - 30) return `${today} around ${at}`;
-  if (minutes >= hour * 60 + 45) return `tomorrow around ${at}`;
+  if (minutes < target - 30) return `${today} around ${at}`;
+  if (minutes >= target + 45) return `tomorrow around ${at}`;
   return "in your next digest";
 }
 
@@ -113,7 +113,7 @@ async function handleActive(env: Env, user: db.User, update: any, ctx: Onboardin
   if (user.step.startsWith("set_") && (await handleSettingInput(ctx, user, m.text))) return;
   const at = new Date(m.date * 1000).toISOString();
   await db.addRequest(env.DB, user.chat_id, m.text, at);
-  await replyToMessage(env, user.chat_id, m.text, at, whenNext(new Date(), user.timezone, user.delivery_hour));
+  await replyToMessage(env, user.chat_id, m.text, at, whenNext(new Date(), user.timezone, user.delivery_hour, user.delivery_minute));
 }
 
 async function handleUpdate(env: Env, update: any, origin: string) {

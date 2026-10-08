@@ -9,9 +9,9 @@ AI_MODEL = "claude-opus-5-5"
 GITHUB_REPO = "devBamidele/yt-digest"
 BOT_USERNAME = "dele_yt_digest_bot"
 
-# Every hour on the hour: start the GitHub run for whoever's delivery hour it is.
+# Every 5 minutes: start the GitHub run for anyone whose delivery time has come.
 [triggers]
-crons = ["0 * * * *"]
+crons = ["*/5 * * * *"]
 
 # Secrets (set with `npx wrangler secret put NAME`, never committed):
 # TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ANTHROPIC_API_KEY, WEBHOOK_SECRET, EVENTS_TOKEN,

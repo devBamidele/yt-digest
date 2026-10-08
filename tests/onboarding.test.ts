@@ -4,7 +4,8 @@ import { readFileSync } from "node:fs";
 import { getPlatformProxy } from "wrangler";
 import worker from "../worker/index.ts";
 import * as db from "../worker/db.ts";
-import { firstDigestDay, importedFromGoogle, parseHour, parseTimezone } from "../worker/onboarding.ts";
+import { importedFromGoogle, parseTimezone } from "../worker/onboarding.ts";
+import { isDue, nextDigest, parseTime } from "../worker/time.ts";
 
 let proxy: Awaited<ReturnType<typeof getPlatformProxy>>;
 let env: any;
@@ -79,7 +80,8 @@ test("full onboarding with an invite: connect → budget → mix → hour → ti
   assert.match(lastText(), /Step 3 of 6/);
   await tap("200", "ob|mix|shorts");
   assert.match(lastText(), /Step 4 of 6/);
-  await msg("200", "8pm");
+  await msg("200", "8:32pm");
+  assert.match(sent.filter((s) => s.method === "sendMessage").at(-2)!.body.text, /I'll use <b>20:30<\/b>/);
   assert.match(lastText(), /Step 5 of 6/);
   await msg("200", "Atlantis");
   assert.match(lastText(), /don't know that one/);
@@ -87,10 +89,10 @@ test("full onboarding with an invite: connect → budget → mix → hour → ti
   assert.match(lastText(), /Step 6 of 6/);
   await msg("200", "tech reviews and Nigerian food, no crypto");
   assert.match(lastText(), /You're set!/);
-  assert.match(lastText(), /3 channels\n• 90 min a day, mostly shorts\n• Every day at 20:00 \(Africa\/Accra\)/);
+  assert.match(lastText(), /3 channels\n• 90 min a day, mostly shorts\n• Every day at 20:30 \(Africa\/Accra\)/);
 
   const u = (await db.getUser(env.DB, "200"))!;
-  assert.deepEqual([u.status, u.budget_minutes, u.shorts_ratio, u.delivery_hour, u.timezone], ["active", 90, 0.7, 20, "Africa/Accra"]);
+  assert.deepEqual([u.status, u.budget_minutes, u.shorts_ratio, u.delivery_hour, u.delivery_minute, u.timezone], ["active", 90, 0.7, 20, 30, "Africa/Accra"]);
   assert.equal((await db.userState(env.DB, "200"))!.taste.notes, "tech reviews and Nigerian food, no crypto");
 
   // The invite is used up.
@@ -137,17 +139,39 @@ test("sign-in link: forged signatures are refused; a real one redirects to Googl
 });
 
 test("parsing typed times and time zones", () => {
-  assert.equal(parseHour("8pm"), 20);
-  assert.equal(parseHour("07:30"), 7);
-  assert.equal(parseHour("12am"), 0);
-  assert.equal(parseHour("25"), null);
+  const t = (s: string) => {
+    const r = parseTime(s);
+    return r && `${r.hour}:${r.minute}${r.rounded ? " (rounded)" : ""}`;
+  };
+  assert.equal(t("8pm"), "20:0");
+  assert.equal(t("22:30"), "22:30");
+  assert.equal(t("7:15am"), "7:15");
+  assert.equal(t("22.45"), "22:45");
+  assert.equal(t("22:32"), "22:30 (rounded)");
+  assert.equal(t("10:58"), "11:0 (rounded)");
+  assert.equal(t("23:58"), "0:0 (rounded)");
+  assert.equal(t("12am"), "0:0");
+  assert.equal(t("25"), null);
+  assert.equal(t("13pm"), null);
+  assert.equal(t("10:75"), null);
   assert.equal(parseTimezone("Lagos"), "Africa/Lagos");
   assert.equal(parseTimezone("Europe/Paris"), "Europe/Paris");
   assert.equal(parseTimezone("UTC+1"), "Etc/GMT-1");
   assert.equal(parseTimezone("GMT-5"), "Etc/GMT+5");
   assert.equal(parseTimezone("Narnia"), null);
-  assert.equal(firstDigestDay("Africa/Lagos", 18, new Date("2026-10-09T10:00:00Z")), "today");
-  assert.equal(firstDigestDay("Africa/Lagos", 18, new Date("2026-10-09T20:00:00Z")), "tomorrow");
+});
+
+test("due at the delivery minute, within the catch-up window, once a day", () => {
+  const u = { timezone: "Africa/Lagos", delivery_hour: 22, delivery_minute: 30, last_digest_at: null as string | null };
+  const lagos = (hhmm: string) => new Date(`2026-10-09T${hhmm}:00+01:00`);
+  assert.equal(isDue(u, lagos("22:25")), false);
+  assert.equal(isDue(u, lagos("22:30")), true);
+  assert.equal(isDue(u, lagos("22:55")), true); // a missed check catches up
+  assert.equal(isDue(u, lagos("23:00")), false); // but not hours later
+  assert.equal(isDue({ ...u, last_digest_at: lagos("22:31").toISOString() }, lagos("22:35")), false); // already sent today
+  assert.equal(nextDigest(u, lagos("10:00")), "today at 10:30pm");
+  assert.equal(nextDigest(u, lagos("22:40")), "in the next few minutes");
+  assert.equal(nextDigest(u, lagos("23:30")), "tomorrow at 10:30pm");
 });
 
 test("/settings: buttons change watch time and mix; typed answers change time and time zone", async () => {
@@ -161,10 +185,13 @@ test("/settings: buttons change watch time and mix; typed answers change time an
   await tap("200", "set|hour");
   await msg("200", "7am");
   assert.match(lastText(), /✓ Delivery time: 07:00/);
+  await tap("200", "set|hour");
+  await msg("200", "7:15am");
+  assert.match(lastText(), /✓ Delivery time: 07:15 .*Next digest/);
   await tap("200", "set|timezone");
   await msg("200", "London");
   const u = (await db.getUser(env.DB, "200"))!;
-  assert.deepEqual([u.budget_minutes, u.shorts_ratio, u.delivery_hour, u.timezone, u.step], [120, 0.2, 7, "Europe/London", "done"]);
+  assert.deepEqual([u.budget_minutes, u.shorts_ratio, u.delivery_hour, u.delivery_minute, u.timezone, u.step], [120, 0.2, 7, 15, "Europe/London", "done"]);
   // Typed setting answers are not saved as requests.
   assert.equal((await db.userState(env.DB, "200"))!.requests.length, 0);
 });
@@ -172,9 +199,9 @@ test("/settings: buttons change watch time and mix; typed answers change time an
 test("/pause stops digests, /resume restarts them", async () => {
   await msg("200", "/pause");
   assert.equal((await db.getUser(env.DB, "200"))!.status, "paused");
-  assert.ok(!(await db.dueUsers(env.DB, new Date("2026-10-10T06:00:00Z"))).some((u) => u.chat_id === "200")); // 07:00 London
+  assert.ok(!(await db.dueUsers(env.DB, new Date("2026-10-10T06:15:00Z"))).some((u) => u.chat_id === "200")); // 07:15 London
   await msg("200", "/resume");
-  assert.ok((await db.dueUsers(env.DB, new Date("2026-10-10T06:00:00Z"))).some((u) => u.chat_id === "200"));
+  assert.ok((await db.dueUsers(env.DB, new Date("2026-10-10T06:15:00Z"))).some((u) => u.chat_id === "200"));
 });
 
 test("/sync asks to sign in again and replaces the channel list without redoing setup", async () => {
@@ -195,7 +222,7 @@ test("owner-only commands: /invite and /users", async () => {
   await msg("1", "/invite");
   assert.match(lastText(), /https:\/\/t\.me\/test_bot\?start=[\w-]{12}/);
   await msg("1", "/users");
-  assert.match(lastText(), /Ada: active, 1 channels, 07:00 Europe\/London/);
+  assert.match(lastText(), /Ada: active, 1 channels, 07:15 Europe\/London/);
 });
 
 test("/delete asks first, then erases everything", async () => {

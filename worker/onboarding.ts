@@ -3,6 +3,7 @@
 import { subsFromCsv, type Sub } from "../src/subs.ts";
 import * as db from "./db.ts";
 import { connectLink, SubsError, subscriptionsForHandle } from "./google.ts";
+import { fmtTime, nextDigest, parseTime } from "./time.ts";
 
 export type Tg = (method: string, payload: Record<string, unknown>) => Promise<any>;
 
@@ -70,17 +71,7 @@ export function parseTimezone(text: string): string | null {
   return null;
 }
 
-/** "18", "6pm", "18:00", "7:30am" → hour 0-23 (minutes are dropped), or null. */
-export function parseHour(text: string): number | null {
-  const m = text.trim().toLowerCase().match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/);
-  if (!m) return null;
-  let h = Number(m[1]);
-  if (m[3] === "pm" && h < 12) h += 12;
-  if (m[3] === "am" && h === 12) h = 0;
-  return h >= 0 && h <= 23 ? h : null;
-}
-
-const hh = (h: number) => `${String(h).padStart(2, "0")}:00`;
+const hh = (h: number) => fmtTime(h, 0);
 
 /** Sends the prompt for the user's current step. */
 export async function prompt(ctx: OnboardingCtx, user: db.User): Promise<void> {
@@ -106,7 +97,7 @@ export async function prompt(ctx: OnboardingCtx, user: db.User): Promise<void> {
         Object.entries(MIXES).map(([k, m]) => btn(m.label, `mix|${k}`)),
       ]));
     case "hour":
-      return void (await send(`<b>${stepNo("hour")}: when should your digest arrive?</b>\n\nOr type a time, e.g. "8am" or "19:00".`, rows(HOURS.map((h) => btn(hh(h), `hour|${h}`)), 3)));
+      return void (await send(`<b>${stepNo("hour")}: when should your digest arrive?</b>\n\nOr type any time, e.g. "7:30am" or "22:30".`, rows(HOURS.map((h) => btn(hh(h), `hour|${h}`)), 3)));
     case "timezone":
       return void (await send(`<b>${stepNo("timezone")}: which time zone are you in?</b>\n\nOr type your city or UTC offset, e.g. "Accra" or "UTC+1".`, rows(ZONES.map(([l, z]) => btn(l, `tz|${z}`)), 2)));
     case "taste":
@@ -127,12 +118,6 @@ async function advance(ctx: OnboardingCtx, chatId: string, from: string) {
   }
 }
 
-/** First digest: today if the delivery hour is still ahead in their time zone, else tomorrow. */
-export function firstDigestDay(timezone: string, hour: number, now = new Date()): "today" | "tomorrow" {
-  const localHour = Number(now.toLocaleString("en-GB", { timeZone: timezone, hour: "2-digit", hourCycle: "h23" }));
-  return localHour < hour ? "today" : "tomorrow";
-}
-
 async function finish(ctx: OnboardingCtx, chatId: string) {
   await db.updateUser(ctx.db, chatId, { status: "active", step: "done" });
   const u = (await db.getUser(ctx.db, chatId))!;
@@ -142,8 +127,8 @@ async function finish(ctx: OnboardingCtx, chatId: string) {
     chat_id: chatId,
     parse_mode: "HTML",
     text:
-      `🎉 <b>You're set!</b>\n\n• ${channels} channels\n• ${u.budget_minutes} min a day, ${mix}\n• Every day at ${hh(u.delivery_hour)} (${u.timezone})\n\n` +
-      `Your first digest arrives ${firstDigestDay(u.timezone, u.delivery_hour)} at ${hh(u.delivery_hour)}.\n\n` +
+      `🎉 <b>You're set!</b>\n\n• ${channels} channels\n• ${u.budget_minutes} min a day, ${mix}\n• Every day at ${fmtTime(u.delivery_hour, u.delivery_minute)} (${u.timezone})\n\n` +
+      `Your first digest arrives ${nextDigest(u)}.\n\n` +
       `Message me any time to change a day ("30 min, only shorts, something funny"), tap 👍/👎 on videos to teach me, and use /settings to change your defaults.`,
   });
 }
@@ -203,7 +188,7 @@ export async function handleOnboarding(ctx: OnboardingCtx, user: db.User, update
     if (field !== user.step && !(field === "tz" && user.step === "timezone")) return; // an old button
     if (field === "budget") await db.updateUser(ctx.db, chatId, { budget_minutes: Number(value) });
     else if (field === "mix" && MIXES[value]) await db.updateUser(ctx.db, chatId, { shorts_ratio: MIXES[value].ratio });
-    else if (field === "hour") await db.updateUser(ctx.db, chatId, { delivery_hour: Number(value) });
+    else if (field === "hour") await db.updateUser(ctx.db, chatId, { delivery_hour: Number(value), delivery_minute: 0 });
     else if (field === "tz" && validZone(value)) await db.updateUser(ctx.db, chatId, { timezone: value });
     else if (field !== "taste") return;
     await advance(ctx, chatId, user.step);
@@ -228,9 +213,10 @@ export async function handleOnboarding(ctx: OnboardingCtx, user: db.User, update
       return prompt(ctx, user);
     }
     case "hour": {
-      const h = parseHour(text);
-      if (h === null) return void (await reply('I didn\'t catch that time. Try e.g. "8am" or "19:00".'));
-      await db.updateUser(ctx.db, chatId, { delivery_hour: h });
+      const t = parseTime(text);
+      if (!t) return void (await reply('I didn\'t catch that time. Try e.g. "8am", "7:30pm" or "22:30".'));
+      await db.updateUser(ctx.db, chatId, { delivery_hour: t.hour, delivery_minute: t.minute });
+      if (t.rounded) await reply(`I deliver in 5-minute steps, so I'll use <b>${fmtTime(t.hour, t.minute)}</b>.`);
       return advance(ctx, chatId, "hour");
     }
     case "timezone": {

@@ -10,7 +10,7 @@ const v = (id: string, channelId: string, kind: "short" | "long" = "long"): Vide
   priorityWeight: 1, views: 1000, subscriberCount: 10_000, durationSeconds: kind === "short" ? 50 : 300, kind,
 });
 const state = (over: Partial<UserState> = {}): UserState => ({
-  user: { chat_id: "9", name: "T", status: "active", timezone: "Africa/Lagos", delivery_hour: 18, budget_minutes: 30, shorts_ratio: 0.4, is_owner: 0, last_digest_at: null },
+  user: { chat_id: "9", name: "T", status: "active", timezone: "Africa/Lagos", delivery_hour: 18, delivery_minute: 0, budget_minutes: 30, shorts_ratio: 0.4, is_owner: 0, last_digest_at: null },
   creators: [{ id: "UCmine", name: "Mine" }],
   votes: [], sent: [{ video_id: "old", at: new Date().toISOString() }], requests: [],
   taste: { notes: "", learned: "", votes_used: 0 }, agentNotes: [], ratings: [],

@@ -3,7 +3,8 @@
 // park the user in a "set_*" step until they reply.
 import * as db from "./db.ts";
 import { connectLink } from "./google.ts";
-import { MIXES, parseHour, parseTimezone, type OnboardingCtx } from "./onboarding.ts";
+import { MIXES, parseTimezone, type OnboardingCtx } from "./onboarding.ts";
+import { fmtTime, nextDigest, parseTime } from "./time.ts";
 
 export const COMMANDS: [string, string][] = [
   ["settings", "Change watch time, mix, delivery time, time zone or interests"],
@@ -14,7 +15,7 @@ export const COMMANDS: [string, string][] = [
   ["help", "What I can do"],
 ];
 
-const hh = (h: number) => `${String(h).padStart(2, "0")}:00`;
+const at = (u: db.User) => fmtTime(u.delivery_hour, u.delivery_minute);
 const btn = (text: string, data: string) => ({ text, callback_data: data });
 const mixLabel = (r: number) => Object.values(MIXES).find((m) => m.ratio === r)?.label ?? `${Math.round(r * 100)}% shorts`;
 
@@ -27,7 +28,7 @@ async function showSettings(ctx: OnboardingCtx, u: db.User) {
   await send(
     ctx,
     u.chat_id,
-    `⚙️ <b>Your settings</b>\n\n• Watch time: ${u.budget_minutes} min\n• Mix: ${mixLabel(u.shorts_ratio)}\n• Delivery: ${hh(u.delivery_hour)} (${u.timezone})\n• Interests: ${taste ? `<i>${taste.replace(/</g, "&lt;").slice(0, 200)}</i>` : "(none yet)"}\n• Status: ${u.status === "paused" ? "⏸ paused" : "▶️ active"}\n\nWhat would you like to change?`,
+    `⚙️ <b>Your settings</b>\n\n• Watch time: ${u.budget_minutes} min\n• Mix: ${mixLabel(u.shorts_ratio)}\n• Delivery: ${at(u)} (${u.timezone})\n• Interests: ${taste ? `<i>${taste.replace(/</g, "&lt;").slice(0, 200)}</i>` : "(none yet)"}\n• Status: ${u.status === "paused" ? "⏸ paused" : "▶️ active"}\n\nWhat would you like to change?`,
     [
       [btn("⏱ Watch time", "set|budget"), btn("⚡ Mix", "set|mix")],
       [btn("🕕 Delivery time", "set|hour"), btn("🌍 Time zone", "set|timezone")],
@@ -59,7 +60,7 @@ export async function handleCommand(ctx: OnboardingCtx, u: db.User, text: string
       return true;
     case "resume":
       await db.updateUser(ctx.db, chat, { status: "active" });
-      await send(ctx, chat, `▶️ Back on. Next digest at ${hh(u.delivery_hour)} (${u.timezone}).`);
+      await send(ctx, chat, `▶️ Back on. Next digest ${nextDigest(u)}.`);
       return true;
     case "delete":
       await send(ctx, chat, "🗑 This erases your channels, settings, 👍/👎 history and everything else I have about you. It can't be undone.", [
@@ -76,7 +77,7 @@ export async function handleCommand(ctx: OnboardingCtx, u: db.User, text: string
         (await db.listUsers(ctx.db)).map(async (x) => {
           const st = await db.userState(ctx.db, x.chat_id);
           const cost = await db.costToday(ctx.db, x.chat_id);
-          return `• ${x.name || x.chat_id}: ${x.status}${x.status === "onboarding" ? ` (${x.step})` : ""}, ${st?.creators.length ?? 0} channels, ${hh(x.delivery_hour)} ${x.timezone}, $${cost.toFixed(2)} today`;
+          return `• ${x.name || x.chat_id}: ${x.status}${x.status === "onboarding" ? ` (${x.step})` : ""}, ${st?.creators.length ?? 0} channels, ${at(x)} ${x.timezone}, $${cost.toFixed(2)} today`;
         }),
       );
       await send(ctx, chat, `👥 <b>Users</b>\n\n${lines.join("\n") || "(none)"}`);
@@ -118,7 +119,7 @@ export async function handleSettingsCallback(ctx: OnboardingCtx, u: db.User, dat
           ctx,
           chat,
           field === "hour"
-            ? '🕕 What time should your digest arrive? Type it, e.g. "8am" or "19:00".'
+            ? '🕕 What time should your digest arrive? Type it, e.g. "8am", "7:30pm" or "22:30".'
             : field === "timezone"
               ? '🌍 Which time zone? Type your city or a UTC offset, e.g. "Accra" or "UTC+1".'
               : "💬 Tell me what you're into, in your own words. This replaces your current interests.",
@@ -145,13 +146,18 @@ export async function handleSettingInput(ctx: OnboardingCtx, u: db.User, text: s
   const chat = u.chat_id;
   switch (u.step) {
     case "set_hour": {
-      const h = parseHour(text);
-      if (h === null) {
-        await send(ctx, chat, 'I didn\'t catch that time. Try e.g. "8am" or "19:00".');
+      const t = parseTime(text);
+      if (!t) {
+        await send(ctx, chat, 'I didn\'t catch that time. Try e.g. "8am", "7:30pm" or "22:30".');
         return true;
       }
-      await db.updateUser(ctx.db, chat, { delivery_hour: h, step: "done" });
-      await send(ctx, chat, `✓ Delivery time: ${hh(h)} (${u.timezone})`);
+      await db.updateUser(ctx.db, chat, { delivery_hour: t.hour, delivery_minute: t.minute, step: "done" });
+      const updated = { ...u, delivery_hour: t.hour, delivery_minute: t.minute };
+      await send(
+        ctx,
+        chat,
+        `✓ Delivery time: ${fmtTime(t.hour, t.minute)} (${u.timezone})${t.rounded ? " (I deliver in 5-minute steps)" : ""}. Next digest ${nextDigest(updated)}.`,
+      );
       return true;
     }
     case "set_timezone": {

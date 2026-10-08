@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS users (
   status TEXT NOT NULL DEFAULT 'onboarding', -- onboarding | active | paused
   step TEXT NOT NULL DEFAULT 'connect',      -- onboarding step, see worker/onboarding.ts
   timezone TEXT NOT NULL DEFAULT 'Africa/Lagos',
-  delivery_hour INTEGER NOT NULL DEFAULT 18, -- local hour, 0-23
+  delivery_hour INTEGER NOT NULL DEFAULT 18, -- local time: hour 0-23 …
+  delivery_minute INTEGER NOT NULL DEFAULT 0, -- … and minute, in 5-minute steps
   budget_minutes INTEGER NOT NULL DEFAULT 60,
   shorts_ratio REAL NOT NULL DEFAULT 0.4,
   is_owner INTEGER NOT NULL DEFAULT 0,
