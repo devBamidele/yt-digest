@@ -25,7 +25,7 @@ Every day at 18:00 WAT (17:00 UTC), send one Telegram message with the best new 
 | Scheduling | GitHub Actions cron `0 17 * * *`. Secrets as repo secrets → env vars. |
 | State | `state/` (summary cache, memory.json, Telegram offset) and `logs/` are committed back to the repo by the workflow after each run |
 | RSS fetching | At most 10 feeds in parallel, so 100+ creators don't hammer YouTube |
-| Telegram input (v2) | No server. Each run starts by reading new messages and button taps with `getUpdates`. |
+| Telegram input | Always-on Cloudflare Worker (`worker/`, `npm run worker:deploy`) receives every message and tap via webhook, stores it in KV for 30 days, answers taps instantly and replies to requests with what Claude understood. GitHub runs read stored updates from its `/events` endpoint (EVENTS_URL / EVENTS_TOKEN). Without those, they fall back to Telegram `getUpdates`. |
 
 ## 2. Project layout
 
