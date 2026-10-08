@@ -90,35 +90,66 @@ export function formatDigest(
   ];
 }
 
-export async function sendTelegram(
-  text: string,
-  { replyMarkup, silent = false }: { replyMarkup?: object; silent?: boolean } = {},
-  attempt = 1,
-): Promise<void> {
+/** YouTube's medium thumbnail: 320×180, widescreen, no black bars. */
+export const thumbnailUrl = (videoId: string) => `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
+
+const CAPTION_MAX = 1024; // Telegram's photo caption limit (visible characters)
+
+/** Calls a Telegram Bot API method, retrying on rate limits. */
+async function telegram(method: string, payload: Record<string, unknown>, attempt = 1): Promise<void> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
   if (!token || !chatId) throw new Error("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set");
 
-  const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+  const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      disable_notification: silent,
-      ...(replyMarkup && { reply_markup: replyMarkup }),
-    }),
+    body: JSON.stringify({ chat_id: chatId, parse_mode: "HTML", ...payload }),
   });
   const body = await res.json();
   if (body.ok) return;
   const wait = body.parameters?.retry_after;
   if (res.status === 429 && wait && attempt <= 3) {
     await new Promise((r) => setTimeout(r, wait * 1000));
-    return sendTelegram(text, { replyMarkup, silent }, attempt + 1);
+    return telegram(method, payload, attempt + 1);
   }
-  throw new Error(`Telegram sendMessage failed: ${body.description ?? res.status}`);
+  throw new Error(`Telegram ${method} failed: ${body.description ?? res.status}`);
+}
+
+export async function sendTelegram(
+  text: string,
+  { replyMarkup, silent = false }: { replyMarkup?: object; silent?: boolean } = {},
+): Promise<void> {
+  await telegram("sendMessage", {
+    text,
+    link_preview_options: { is_disabled: true },
+    disable_notification: silent,
+    ...(replyMarkup && { reply_markup: replyMarkup }),
+  });
+}
+
+/** A video as its thumbnail with the text as caption; plain text if the photo can't be sent. */
+export async function sendVideo(
+  m: DigestMessage & { video: Video },
+  { silent = false, log = console.log }: { silent?: boolean; log?: (s: string) => void } = {},
+): Promise<"photo" | "text"> {
+  const replyMarkup = keyboard(m.video);
+  const visible = m.text.replace(/<[^>]+>/g, "").length;
+  if (visible <= CAPTION_MAX) {
+    try {
+      await telegram("sendPhoto", {
+        photo: thumbnailUrl(m.video.videoId),
+        caption: m.text,
+        disable_notification: silent,
+        reply_markup: replyMarkup,
+      });
+      return "photo";
+    } catch (e) {
+      log(`  ! thumbnail failed for ${m.video.videoId} (${(e as Error).message}); sending as text`);
+    }
+  }
+  await sendTelegram(m.text, { replyMarkup, silent });
+  return "text";
 }
 
 /**
@@ -128,7 +159,11 @@ export async function sendTelegram(
 export async function deliver(messages: DigestMessage[], onDelivered: (v: Video) => void = () => {}): Promise<void> {
   for (const [i, m] of messages.entries()) {
     if (i > 0) await new Promise((r) => setTimeout(r, SEND_GAP_MS));
-    await sendTelegram(m.text, { replyMarkup: m.video && keyboard(m.video), silent: i > 0 });
-    if (m.video) onDelivered(m.video);
+    if (m.video) {
+      await sendVideo(m as DigestMessage & { video: Video }, { silent: i > 0 });
+      onDelivered(m.video);
+    } else {
+      await sendTelegram(m.text, { silent: i > 0 });
+    }
   }
 }

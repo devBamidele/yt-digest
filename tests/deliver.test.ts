@@ -85,7 +85,7 @@ test("delivery marks each video as soon as its message is sent, and stops at a f
   globalThis.fetch = (async (_url: string, init: any) => {
     const body = JSON.parse(init.body);
     sent.push(body);
-    const fail = body.text.includes("Title 2");
+    const fail = (body.text ?? body.caption).includes("Title 2");
     return { status: fail ? 400 : 200, json: async () => (fail ? { ok: false, description: "boom" } : { ok: true }) };
   }) as any;
   const delivered: string[] = [];
@@ -98,6 +98,8 @@ test("delivery marks each video as soon as its message is sent, and stops at a f
   assert.equal(sent[0].disable_notification, false); // header notifies
   assert.equal(sent[1].disable_notification, true); // the rest are silent
   assert.ok(sent[1].reply_markup.inline_keyboard);
+  assert.equal(sent[1].photo, "https://i.ytimg.com/vi/id1/mqdefault.jpg"); // video as thumbnail + caption
+  assert.match(sent[1].caption, /Title 1/);
 });
 
 test("titles lose trailing hashtags, but hashtags mid-title and all-hashtag titles stay", async () => {
@@ -106,4 +108,26 @@ test("titles lose trailing hashtags, but hashtags mid-title and all-hashtag titl
   assert.equal(cleanTitle("Try Not To Laugh Pt. 840😹🤣😂#ifyoulaughyoulose#dontlaughchallenge"), "Try Not To Laugh Pt. 840😹🤣😂");
   assert.equal(cleanTitle("The #1 Street Food in NYC"), "The #1 Street Food in NYC");
   assert.equal(cleanTitle("#shorts #funny"), "#shorts #funny");
+});
+
+test("a video whose thumbnail fails is sent as a text message instead", async () => {
+  const v = vid(7, "long");
+  const [, m] = formatDigest(sel([v]), [v], 60, "d");
+  process.env.TELEGRAM_BOT_TOKEN = "t";
+  process.env.TELEGRAM_CHAT_ID = "1";
+  const realFetch = globalThis.fetch;
+  const methods: string[] = [];
+  globalThis.fetch = (async (url: string) => {
+    const method = url.split("/").pop()!;
+    methods.push(method);
+    const ok = method !== "sendPhoto";
+    return { status: ok ? 200 : 400, json: async () => (ok ? { ok: true } : { ok: false, description: "failed to get HTTP URL content" }) };
+  }) as any;
+  try {
+    const { sendVideo } = await import("../src/deliver.ts");
+    assert.equal(await sendVideo(m as any, { log: () => {} }), "text");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.deepEqual(methods, ["sendPhoto", "sendMessage"]);
 });
