@@ -9,15 +9,15 @@ import type { Video } from "./types.ts";
 export const CACHE_PATH = "state/summaries.json";
 
 // Bump when the prompt changes, so cached summaries from the old prompt are regenerated.
-const PROMPT_VERSION = 2;
+export const PROMPT_VERSION = 2;
 
-interface CacheEntry {
+export interface CacheEntry {
   summary: string;
   model: string;
   promptVersion: number;
   createdAt: string;
 }
-type Cache = Record<string, CacheEntry>;
+export type Cache = Record<string, CacheEntry>;
 
 const SYSTEM = `You write summaries of YouTube videos for a personal evening digest.
 You only see each video's channel, title, length and description, not the video itself.
@@ -98,9 +98,21 @@ export async function summarizeOne(client: Anthropic, model: string, v: Video) {
   }
 }
 
+/** Where summaries are cached: a file for the single-user setup, the shared database in v3. */
+export interface SummaryStore {
+  get(videoIds: string[]): Promise<Cache>;
+  put(entries: Cache): Promise<void>;
+}
+
+const fileStore: SummaryStore = {
+  get: async () => loadCache(),
+  put: async (entries) => saveCache({ ...loadCache(), ...entries }),
+};
+
 /** Adds `summary` to each video. Cached summaries are reused; only new videos call the API. */
-export async function summarize(videos: Video[], model: string, log = console.log) {
-  const cache = loadCache();
+export async function summarize(videos: Video[], model: string, log = console.log, store: SummaryStore = fileStore) {
+  const cache = await store.get(videos.map((v) => v.videoId));
+  const fresh_: Cache = {};
   const stats: SummaryStats = { cached: 0, generated: 0, failed: 0, inputTokens: 0, outputTokens: 0 };
   const fresh = (v: Video) => cache[v.videoId]?.model === model && cache[v.videoId]?.promptVersion === PROMPT_VERSION;
   const todo = videos.filter((v) => !fresh(v));
@@ -114,7 +126,7 @@ export async function summarize(videos: Video[], model: string, log = console.lo
         stats.inputTokens += r.usage.input;
         stats.outputTokens += r.usage.output;
         if (r.summary) {
-          cache[v.videoId] = { summary: r.summary, model, promptVersion: PROMPT_VERSION, createdAt: new Date().toISOString() };
+          cache[v.videoId] = fresh_[v.videoId] = { summary: r.summary, model, promptVersion: PROMPT_VERSION, createdAt: new Date().toISOString() };
           stats.generated++;
         } else {
           stats.failed++;
@@ -126,7 +138,7 @@ export async function summarize(videos: Video[], model: string, log = console.lo
         log(`  ! summary failed for ${v.videoId} (${msg}); using description`);
       }
     });
-    saveCache(cache);
+    await store.put(fresh_);
   }
 
   const out = videos.map((v) => ({ ...v, summary: fresh(v) ? cache[v.videoId].summary : fallbackSummary(v) }));

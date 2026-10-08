@@ -1,0 +1,20 @@
+# App-wide defaults for v3 (multi-user). Personal settings — channels, watch time, shorts mix,
+# delivery time, time zone — live per user in the database and are set in the bot.
+
+shorts_max_seconds: 180 # anything at or under this is a short
+backlog_days: 7 # unsent videos stay eligible this many days
+max_per_creator: 2 # at most this many videos from one channel per digest
+max_video_minutes: 60 # never pick a single video longer than this
+max_video_share: 0.5 # nor one longer than this share of the day's budget
+
+summary_model: claude-sonnet-5-5
+mode: agent # formula | ai | agent
+ai_model: claude-opus-5-5
+ai_shortlist: 120
+ai_weight: 0.7
+min_fit: 4
+agent_max_tool_calls: 20
+
+# Claude spend per user per day (owner exempt). Past it: agent → AI ranking with the summary
+# model; past twice it: formula only, and summaries fall back to the description.
+user_daily_cap_usd: 0.40

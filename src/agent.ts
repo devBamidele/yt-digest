@@ -29,7 +29,8 @@ export interface AgentResult {
   skipped?: string; // set when the agent decided nothing is worth sending
   intro?: string;
   toolLog: ToolLog[];
-  usage: { input: number; output: number; cacheRead: number };
+  usage: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  notesWritten: string[]; // write_memory calls, for the caller to save
   outcome: "selected" | "skipped" | "failed";
   error?: string;
 }
@@ -171,13 +172,18 @@ export async function runAgent(opts: {
   request: string;
   dryRun: boolean;
   log?: (s: string) => void;
+  // Per-user data (v3). Without these, the agent uses the single-user files.
+  notes?: string[];
+  weights?: Map<string, { weight: number; up: number; down: number }>;
 }): Promise<AgentResult> {
   const { candidates, cfg, taste, request, dryRun } = opts;
   const log = opts.log ?? console.log;
   const byId = new Map(candidates.map((v) => [v.videoId, v]));
   const budget = Math.floor(cfg.budgetMinutes * 60);
   const maxVideo = Math.min(cfg.maxVideoMinutes * 60, budget * cfg.maxVideoShare);
-  const learned = channelWeights(loadFeedback());
+  const learned = opts.weights ?? channelWeights(loadFeedback());
+  const notesFile = opts.notes === undefined;
+  const memory = () => (notesFile ? readNotes() : opts.notes!.map((n) => `- ${n}`));
   const pctRank = new Map<string, number>();
   for (const kind of ["short", "long"] as const) {
     const vs = candidates.filter((v) => v.kind === kind).sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
@@ -185,8 +191,8 @@ export async function runAgent(opts: {
   }
 
   const toolLog: ToolLog[] = [];
-  const usage = { input: 0, output: 0, cacheRead: 0 };
-  let notesWritten = 0;
+  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  const notesWritten: string[] = [];
   let underfillWarned = ""; // the list we already warned about; resubmitting it means "yes, on purpose"
   let final: AgentResult | null = null;
 
@@ -219,15 +225,15 @@ export async function runAgent(opts: {
       return cs.length ? cs.map((c) => `(${c.likes}♥) ${c.text}`).join("\n") : "No comments (or comments are turned off).";
     },
     read_memory: async () => {
-      const notes = readNotes();
+      const notes = memory();
       const fb = [...learned].map(([ch, t]) => `${candidates.find((v) => v.channelId === ch)?.creator ?? ch}: ${t.up} 👍, ${t.down} 👎`);
       return `Your notes:\n${notes.join("\n") || "(none)"}\n\nMy 👍/👎 by channel:\n${fb.join("\n") || "(none)"}`;
     },
     write_memory: async ({ note }) => {
-      if (notesWritten >= 2) return "Not saved: at most 2 notes per run.";
-      notesWritten++;
+      if (notesWritten.length >= 2) return "Not saved: at most 2 notes per run.";
       if (dryRun) return "Noted (dry run: not saved).";
-      saveNote(note);
+      notesWritten.push(String(note).replace(/\s+/g, " ").slice(0, 300));
+      if (notesFile) saveNote(note);
       return "Saved.";
     },
     propose_selection: async ({ video_ids, reasons, intro }) => {
@@ -245,12 +251,12 @@ export async function runAgent(opts: {
       }
       const why = new Map((reasons as { id: string; why: string }[]).map((r) => [r.id, r.why]));
       const picked = (video_ids as string[]).map((id) => ({ ...byId.get(id)!, selected: true, fitReason: why.get(id), reason: "picked by agent" }));
-      final = { picked, intro, toolLog, usage, outcome: "selected" };
+      final = { picked, intro, toolLog, usage, notesWritten, outcome: "selected" };
       const total = picked.reduce((a, v) => a + (v.durationSeconds ?? 0), 0);
       return `Accepted: ${picked.length} videos, ${fmtDuration(total)} of ${fmtDuration(budget)}.`;
     },
     skip_today: async ({ reason }) => {
-      final = { picked: [], skipped: reason, toolLog, usage, outcome: "skipped" };
+      final = { picked: [], skipped: reason, toolLog, usage, notesWritten, outcome: "skipped" };
       return "Accepted: a skip message will be sent.";
     },
   };
@@ -265,7 +271,7 @@ export async function runAgent(opts: {
       role: "user",
       content: [
         `<taste_profile>\n${taste}\n</taste_profile>`,
-        `<your_notes>\n${readNotes().join("\n") || "(none yet)"}\n</your_notes>`,
+        `<your_notes>\n${memory().join("\n") || "(none yet)"}\n</your_notes>`,
         `<tonight>${request || "(no special request)"}</tonight>`,
         `<budget>${fmtDuration(budget)} total; at most ${fmtDuration(Math.floor(maxVideo))} per video; at most ${cfg.maxPerCreator} per channel; aim for ~${Math.round(cfg.shortsRatio * 100)}% shorts</budget>`,
         `<candidates total="${candidates.length}" shorts="${counts.short}" long="${counts.long}">\nTop ${firstPage.length} by formula (use get_new_uploads for the rest):\n${firstPage.map(videoLine).join("\n")}\n</candidates>`,
@@ -290,6 +296,7 @@ export async function runAgent(opts: {
       usage.input += response.usage.input_tokens;
       usage.output += response.usage.output_tokens;
       usage.cacheRead += response.usage.cache_read_input_tokens ?? 0;
+      usage.cacheWrite += response.usage.cache_creation_input_tokens ?? 0;
       messages.push({ role: "assistant", content: response.content }); // append-only, thinking blocks included
 
       if (response.stop_reason === "refusal" || response.stop_reason === "max_tokens") {
@@ -334,7 +341,7 @@ export async function runAgent(opts: {
       messages.push({ role: "user", content: results });
     }
   } catch (e) {
-    return { picked: [], toolLog, usage, outcome: "failed", error: (e as Error).message };
+    return { picked: [], toolLog, usage, notesWritten, outcome: "failed", error: (e as Error).message };
   }
   return final!;
 }

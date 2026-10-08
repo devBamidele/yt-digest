@@ -52,6 +52,10 @@ export function readTaste(path = TASTE_PATH): { notes: string; learned: string; 
 /** The profile as Claude sees it, without the HTML comments. */
 export function tasteForPrompt(path = TASTE_PATH): string {
   const { notes, learned } = readTaste(path);
+  return tasteText(notes, learned);
+}
+
+export function tasteText(notes: string, learned: string): string {
   const strip = (s: string) => s.replace(/<!--[\s\S]*?-->/g, "").trim();
   return [`My own notes:\n${strip(notes) || "(none)"}`, `Learned from my feedback:\n${strip(learned) || "(nothing yet)"}`].join(
     "\n\n",
@@ -88,12 +92,16 @@ function evidenceText(e: Evidence): string {
 
 /** Asks Claude for the learned section. Pure: doesn't touch the file. */
 export async function learnTaste(evidence: Evidence[], notes: string, model: string): Promise<Learned> {
+  return (await learnTasteWithUsage(evidence, notes, model)).learned;
+}
+
+export async function learnTasteWithUsage(evidence: Evidence[], notes: string, model: string) {
   const user = [
     `<my_notes>\n${notes.replace(/<!--[\s\S]*?-->/g, "").trim() || "(none)"}\n</my_notes>`,
     `<votes count="${evidence.length}">\n${evidence.map(evidenceText).join("\n")}\n</votes>`,
   ].join("\n\n");
-  const { data } = await jsonCall<Learned>({ model, system: SYSTEM, user, schema: SCHEMA, effort: "medium" });
-  return data;
+  const { data, usage } = await jsonCall<Learned>({ model, system: SYSTEM, user, schema: SCHEMA, effort: "medium" });
+  return { learned: data, usage };
 }
 
 export function renderLearned(l: Learned, votes: number, date = new Date()): string {
@@ -118,12 +126,15 @@ export function writeLearned(learnedMd: string, path = TASTE_PATH): void {
 
 /** All 👍/👎 taps, with titles and descriptions looked up from YouTube. */
 export async function evidenceFromVotes(): Promise<Evidence[]> {
-  const votes = loadFeedback().votes;
-  const info = await videoInfo(Object.keys(votes));
-  return Object.entries(votes)
-    .filter(([id]) => info.has(id)) // deleted or private videos drop out
-    .map(([id, v]) => {
-      const i = info.get(id)!;
+  return evidenceFor(Object.entries(loadFeedback().votes).map(([videoId, v]) => ({ videoId, vote: v.vote })));
+}
+
+export async function evidenceFor(votes: { videoId: string; vote: "up" | "down" }[]): Promise<Evidence[]> {
+  const info = await videoInfo(votes.map((v) => v.videoId));
+  return votes
+    .filter((v) => info.has(v.videoId)) // deleted or private videos drop out
+    .map((v) => {
+      const i = info.get(v.videoId)!;
       return { vote: v.vote, title: i.title, creator: i.creator, description: i.description, durationSeconds: i.durationSeconds };
     });
 }

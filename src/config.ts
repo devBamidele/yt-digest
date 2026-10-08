@@ -68,3 +68,20 @@ export function parseConfig(text: string, budgetOverride?: number): Config {
 export function loadConfig(path = "creators.yaml", budgetOverride?: number): Config {
   return parseConfig(readFileSync(path, "utf8"), budgetOverride);
 }
+
+export interface AppConfig extends Omit<Config, "creators" | "budgetMinutes" | "shortsRatio"> {
+  userDailyCapUsd: number;
+}
+
+/** config.yaml: app-wide defaults only (v3). Personal settings come from the database. */
+export function loadAppConfig(path = "config.yaml"): AppConfig {
+  const text = readFileSync(path, "utf8");
+  const raw = parse(text) ?? {};
+  // Reuse parseConfig's defaults and validation with a placeholder creator.
+  const { creators: _c, budgetMinutes: _b, shortsRatio: _s, ...rest } = parseConfig(
+    `${text}\ncreators:\n  - id: UC0000000000000000000000\n`,
+  );
+  const cap = raw.user_daily_cap_usd ?? 0.4;
+  if (!(typeof cap === "number" && cap >= 0)) throw new Error(`user_daily_cap_usd must be a number ≥ 0, got ${cap}`);
+  return { ...rest, userDailyCapUsd: cap };
+}

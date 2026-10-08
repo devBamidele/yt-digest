@@ -83,6 +83,27 @@ export function ratingsKey(taste: string, request: string, model: string): strin
   return createHash("sha256").update(`${model}\n${request}\n${taste}`).digest("hex").slice(0, 16);
 }
 
+/** Rates videos with no cache: returns what Claude said plus token usage. Failed batches are left out. */
+export async function rateUncached(videos: Video[], taste: string, request: string, model: string, log = console.log) {
+  const ratings = new Map<string, Rating>();
+  const usage = { input: 0, output: 0 };
+  const batches = Array.from({ length: Math.ceil(videos.length / BATCH) }, (_, i) => videos.slice(i * BATCH, (i + 1) * BATCH));
+  await mapLimit(batches, 3, async (batch) => {
+    try {
+      const r = await rateBatch(batch, taste, request, model);
+      usage.input += r.usage.input;
+      usage.output += r.usage.output;
+      const ids = new Set(batch.map((v) => v.videoId));
+      for (const x of r.ratings) {
+        if (ids.has(x.id)) ratings.set(x.id, { fit: Math.max(0, Math.min(10, Math.round(x.fit))), reason: x.reason });
+      }
+    } catch (e) {
+      log(`  ! rating batch failed (${(e as Error).message}); those videos fall back to the formula`);
+    }
+  });
+  return { ratings, usage };
+}
+
 /** Rates videos, reusing cached ratings made with the same profile, request and model. */
 export async function rate(
   videos: Video[],

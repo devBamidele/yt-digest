@@ -127,8 +127,12 @@ export function clearRequests(path = FEEDBACK_PATH): void {
 
 /** Per-channel weight multipliers learned from votes: STEP^(👍 − 👎), clamped. */
 export function channelWeights(state: FeedbackState): Map<string, { weight: number; up: number; down: number }> {
+  return weightsFromVotes(Object.values(state.votes));
+}
+
+export function weightsFromVotes(votes: { channelId: string; vote: "up" | "down" }[]): Map<string, { weight: number; up: number; down: number }> {
   const tally = new Map<string, { up: number; down: number }>();
-  for (const v of Object.values(state.votes)) {
+  for (const v of votes) {
     const t = tally.get(v.channelId) ?? { up: 0, down: 0 };
     v.vote === "up" ? t.up++ : t.down++;
     tally.set(v.channelId, t);

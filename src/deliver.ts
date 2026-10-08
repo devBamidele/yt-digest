@@ -99,12 +99,12 @@ const CAPTION_MAX = 1024; // Telegram's photo caption limit (visible characters)
 async function telegram(method: string, payload: Record<string, unknown>, attempt = 1): Promise<void> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) throw new Error("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set");
+  if (!token || (!chatId && !payload.chat_id)) throw new Error("TELEGRAM_BOT_TOKEN and a chat id must be set");
 
   const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, parse_mode: "HTML", ...payload }),
+    body: JSON.stringify({ chat_id: chatId, parse_mode: "HTML", ...payload }), // payload.chat_id (another user) wins
   });
   const body = await res.json();
   if (body.ok) return;
@@ -118,9 +118,10 @@ async function telegram(method: string, payload: Record<string, unknown>, attemp
 
 export async function sendTelegram(
   text: string,
-  { replyMarkup, silent = false }: { replyMarkup?: object; silent?: boolean } = {},
+  { replyMarkup, silent = false, chatId }: { replyMarkup?: object; silent?: boolean; chatId?: string } = {},
 ): Promise<void> {
   await telegram("sendMessage", {
+    ...(chatId && { chat_id: chatId }),
     text,
     link_preview_options: { is_disabled: true },
     disable_notification: silent,
@@ -131,13 +132,14 @@ export async function sendTelegram(
 /** A video as its thumbnail with the text as caption; plain text if the photo can't be sent. */
 export async function sendVideo(
   m: DigestMessage & { video: Video },
-  { silent = false, log = console.log }: { silent?: boolean; log?: (s: string) => void } = {},
+  { silent = false, log = console.log, chatId }: { silent?: boolean; log?: (s: string) => void; chatId?: string } = {},
 ): Promise<"photo" | "text"> {
   const replyMarkup = keyboard(m.video);
   const visible = m.text.replace(/<[^>]+>/g, "").length;
   if (visible <= CAPTION_MAX) {
     try {
       await telegram("sendPhoto", {
+        ...(chatId && { chat_id: chatId }),
         photo: thumbnailUrl(m.video.videoId),
         caption: m.text,
         disable_notification: silent,
@@ -148,7 +150,7 @@ export async function sendVideo(
       log(`  ! thumbnail failed for ${m.video.videoId} (${(e as Error).message}); sending as text`);
     }
   }
-  await sendTelegram(m.text, { replyMarkup, silent });
+  await sendTelegram(m.text, { replyMarkup, silent, chatId });
   return "text";
 }
 
@@ -156,14 +158,18 @@ export async function sendVideo(
  * Sends the messages in order; only the first one notifies. Calls `onDelivered` for each video
  * as soon as its message is sent, so a failure partway through never repeats earlier videos.
  */
-export async function deliver(messages: DigestMessage[], onDelivered: (v: Video) => void = () => {}): Promise<void> {
+export async function deliver(
+  messages: DigestMessage[],
+  onDelivered: (v: Video) => void = () => {},
+  chatId?: string, // defaults to TELEGRAM_CHAT_ID (the owner)
+): Promise<void> {
   for (const [i, m] of messages.entries()) {
     if (i > 0) await new Promise((r) => setTimeout(r, SEND_GAP_MS));
     if (m.video) {
-      await sendVideo(m as DigestMessage & { video: Video }, { silent: i > 0 });
+      await sendVideo(m as DigestMessage & { video: Video }, { silent: i > 0, chatId });
       onDelivered(m.video);
     } else {
-      await sendTelegram(m.text, { silent: i > 0 });
+      await sendTelegram(m.text, { silent: i > 0, chatId });
     }
   }
 }

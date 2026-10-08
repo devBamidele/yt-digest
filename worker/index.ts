@@ -63,7 +63,7 @@ async function replyToMessage(env: Env, chat_id: string, text: string, at: strin
     process.env.ANTHROPIC_API_KEY = env.ANTHROPIC_API_KEY;
     const r = await parseRequests([{ text, at }], env.AI_MODEL);
     if (r.skip_today) reply = `👌 Okay, no digest ${when.startsWith("tomorrow") ? "tomorrow" : "today"}.`;
-    else if (r.summary) reply = `✅ Got it: <b>${escape(r.summary)}</b>.\nYou'll get it ${when}.`;
+    else if (r.summary) reply = `Got it: <b>${escape(r.summary)}</b>.\nYou'll get it ${when}.`;
     else
       reply =
         "👋 Noted. To change your next digest, tell me the time, the mix or topics, e.g. <i>“45 min, only shorts, something funny”</i>.";
