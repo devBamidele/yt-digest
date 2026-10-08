@@ -4,14 +4,17 @@ import { jsonCall } from "./claude.ts";
 
 export interface TonightRequest {
   budget_minutes: number; // 0 = keep the default
+  shorts_share: number; // 0-100 = % of the time for shorts tonight; -1 = keep the default
   avoid: string[];
   prefer: string[];
   skip_today: boolean;
-  summary: string; // one line for the digest header, e.g. "30 min, no money topics"
+  summary: string; // one line for the digest header, e.g. "30 min, mostly shorts, no money topics"
 }
 
 const SYSTEM = `Someone messages their YouTube digest bot during the day. Turn their messages into settings for tonight's digest.
 - budget_minutes: the watch time they asked for, in minutes (e.g. "an hour and a half" = 90). 0 if they didn't mention time.
+- shorts_share: the % of tonight's time for Shorts if they said anything about shorts vs long videos:
+  "only shorts" = 100, "mostly shorts" = 75, "half and half" = 50, "mostly long videos" = 20, "no shorts" = 0. -1 if they didn't mention it.
 - avoid / prefer: topics, formats or channels to leave out or favour tonight. Short phrases. Empty if none.
 - skip_today: true only if they clearly asked for no digest tonight.
 - summary: under 10 words describing what you understood, e.g. "30 min, no money topics".
@@ -22,12 +25,13 @@ const SCHEMA = {
   type: "object",
   properties: {
     budget_minutes: { type: "integer" },
+    shorts_share: { type: "integer" },
     avoid: { type: "array", items: { type: "string" } },
     prefer: { type: "array", items: { type: "string" } },
     skip_today: { type: "boolean" },
     summary: { type: "string" },
   },
-  required: ["budget_minutes", "avoid", "prefer", "skip_today", "summary"],
+  required: ["budget_minutes", "shorts_share", "avoid", "prefer", "skip_today", "summary"],
   additionalProperties: false,
 };
 
@@ -36,6 +40,7 @@ export async function parseRequests(messages: { text: string; at: string }[], mo
   const { data } = await jsonCall<TonightRequest>({ model, system: SYSTEM, user: `<messages>\n${user}\n</messages>`, schema: SCHEMA });
   // Keep the budget sane whatever was typed.
   data.budget_minutes = Math.max(0, Math.min(600, Math.round(data.budget_minutes)));
+  data.shorts_share = data.shorts_share < 0 ? -1 : Math.min(100, Math.round(data.shorts_share));
   return data;
 }
 

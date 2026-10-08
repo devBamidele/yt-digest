@@ -128,3 +128,12 @@ test("select: no single video takes more than its share of the budget, or over t
   assert.deepEqual(select(vids, 120, 0.3, opts).picked.map((v) => v.durationSeconds).sort(), [1500, 2100]); // 70 > 60 max
   assert.match(select(vids, 60, 0.3, opts).dropped[0].reason!, /too long for today \(max 30:00 per video\)/);
 });
+
+test("select: 'no shorts' and 'only shorts' are strict, even when time is left", () => {
+  const mk = (kind: "short" | "long", d: number) => ({ ...video({ durationSeconds: d }), kind, score: 1 });
+  const pool = [mk("long", 600), mk("short", 60), mk("short", 60)];
+  const none = select(pool, 60, 0);
+  assert.ok(none.picked.every((v) => v.kind === "long"));
+  assert.match(none.dropped.find((v) => v.kind === "short")!.reason!, /no shorts tonight/);
+  assert.ok(select(pool, 60, 1).picked.every((v) => v.kind === "short"));
+});

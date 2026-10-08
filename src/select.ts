@@ -89,8 +89,10 @@ export function select(
   const longCap = capUnits - shortsCap;
 
   // Cap per creator first, so one prolific channel can't fill the digest.
-  // Videos too long for today's budget are out before anything else.
-  const fits = videos.filter((v) => (v.durationSeconds ?? 0) <= maxVideoSeconds);
+  // Videos too long for today's budget are out before anything else, and so is a whole kind
+  // when the ratio says none of it ("no shorts" = 0, "only shorts" = 1).
+  const banned = shortsRatio === 0 ? "short" : shortsRatio === 1 ? "long" : null;
+  const fits = videos.filter((v) => (v.durationSeconds ?? 0) <= maxVideoSeconds && v.kind !== banned);
   const { eligible, capped } = capPerCreator(fits, maxPerCreator);
   const picked = new Map<Video, string>();
 
@@ -115,7 +117,8 @@ export function select(
     const stats = `score ${(v.score ?? 0).toFixed(4)}, ${v.kind}, ${fmtDuration(d)}`;
     if (picked.has(v)) return { ...v, selected: true, reason: `picked (${picked.get(v)}): ${stats}` };
     const why =
-      d > maxVideoSeconds ? `too long for today (max ${fmtDuration(Math.floor(maxVideoSeconds))} per video)`
+      v.kind === banned ? `no ${banned === "short" ? "shorts" : "long videos"} tonight`
+      : d > maxVideoSeconds ? `too long for today (max ${fmtDuration(Math.floor(maxVideoSeconds))} per video)`
       : capped.has(v) ? `creator cap (${maxPerCreator} higher-scored from ${v.creator})`
       : d > left ? `didn't fit (${fmtDuration(left)} left)`
       : "lower score than the picks";

@@ -39,3 +39,9 @@ test("mix: too few shorts is rejected when enough shorts exist; fine when they d
   const onlyLong = new Map(longs.map((x) => [x.videoId, x]));
   assert.deepEqual(validateSelection(["l1", "l2", "l3"], onlyLong, { ...cfg, shortsRatio: 0.4 }), []);
 });
+
+test("mix: 'no shorts' / 'only shorts' tonight are strict", () => {
+  const pool = new Map([v("l", 20, "L"), v("s", 2, "S")].map((x) => [x.videoId, x]));
+  assert.match(validateSelection(["l", "s"], pool, { ...cfg, shortsRatio: 0 }).join(), /no shorts tonight/);
+  assert.match(validateSelection(["l", "s"], pool, { ...cfg, shortsRatio: 1 }).join(), /only shorts tonight/);
+});

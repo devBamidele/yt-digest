@@ -101,7 +101,7 @@ const SYSTEM = `You pick tonight's YouTube digest for one person. They watch it 
 How to work:
 1. Read their taste profile, their request for tonight (if any) and the candidate list you're given.
 2. Look closer where it matters: get_stats for promising or borderline videos, get_top_comments when a title smells like clickbait or a repost. Don't inspect everything; you have a limited number of tool calls.
-3. Call propose_selection with the best set that fits the rules. Quality beats filling time: leave time unused rather than add weak videos. If nothing is worth their time, call skip_today.
+3. Call propose_selection with the best set that fits the rules. Aim to use most of the budget with videos that fit their taste; only leave time unused when the remaining candidates are genuinely weak. If nothing is worth their time, call skip_today.
 
 Rules (code checks all four and rejects a selection that breaks one, telling you why):
 - Total length must not exceed the budget.
@@ -126,6 +126,8 @@ function saveNote(note: string): void {
 
 // How far the shorts share of the budget may drift from shorts_ratio (in budget fractions).
 export const MIX_TOLERANCE = 0.15;
+// A selection using less of the budget than this is sent back once; resubmitting the same list confirms it.
+export const MIN_FILL = 0.8;
 
 /** Checks a proposed selection against the hard rules. Returns the problems (empty = valid). */
 export function validateSelection(ids: string[], byId: Map<string, Video>, cfg: Config): string[] {
@@ -144,6 +146,8 @@ export function validateSelection(ids: string[], byId: Map<string, Video>, cfg: 
   for (const v of vids) {
     if ((v.durationSeconds ?? 0) > maxVideo) problems.push(`${v.videoId} is ${fmtDuration(v.durationSeconds!)}, over the ${fmtDuration(Math.floor(maxVideo))} per-video limit`);
   }
+  if (cfg.shortsRatio === 0 && vids.some((v) => v.kind === "short")) problems.push("no shorts tonight: remove the shorts");
+  if (cfg.shortsRatio === 1 && vids.some((v) => v.kind === "long")) problems.push("only shorts tonight: remove the long videos");
   // Mix: shorts should take about shorts_ratio of the budget. Only enforced when the candidates
   // hold enough of the short side to reach it; otherwise spillover is fine, as in the plain selector.
   const shorts = vids.filter((v) => v.kind === "short").reduce((a, v) => a + (v.durationSeconds ?? 0), 0);
@@ -183,6 +187,7 @@ export async function runAgent(opts: {
   const toolLog: ToolLog[] = [];
   const usage = { input: 0, output: 0, cacheRead: 0 };
   let notesWritten = 0;
+  let underfillWarned = ""; // the list we already warned about; resubmitting it means "yes, on purpose"
   let final: AgentResult | null = null;
 
   const tools: Record<string, (input: any) => Promise<string>> = {
@@ -228,6 +233,16 @@ export async function runAgent(opts: {
     propose_selection: async ({ video_ids, reasons, intro }) => {
       const problems = validateSelection(video_ids, byId, cfg);
       if (problems.length) return `REJECTED, nothing was sent. Fix and resubmit:\n- ${problems.join("\n- ")}`;
+      const used = (video_ids as string[]).reduce((a, id) => a + (byId.get(id)!.durationSeconds ?? 0), 0);
+      const key = [...(video_ids as string[])].sort().join(",");
+      if (used < budget * MIN_FILL && underfillWarned !== key) {
+        underfillWarned = key;
+        return (
+          `REJECTED, nothing was sent: this uses only ${fmtDuration(used)} of ${fmtDuration(budget)}. ` +
+          `There are ${candidates.length} candidates; add good ones to use more of the time. ` +
+          `If nothing else is worth it, submit exactly the same list again to confirm.`
+        );
+      }
       const why = new Map((reasons as { id: string; why: string }[]).map((r) => [r.id, r.why]));
       const picked = (video_ids as string[]).map((id) => ({ ...byId.get(id)!, selected: true, fitReason: why.get(id), reason: "picked by agent" }));
       final = { picked, intro, toolLog, usage, outcome: "selected" };

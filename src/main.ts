@@ -81,7 +81,9 @@ if (requests.length) {
   try {
     tonight = await parseRequests(requests, cfg.aiModel);
     console.log(`Request for tonight (${requests.length} message(s)): ${tonight.summary || "(nothing actionable)"}`);
-    if (tonight.budget_minutes && budget === undefined) cfg.budgetMinutes = tonight.budget_minutes; // --budget still wins
+    // Tonight-only overrides of creators.yaml; --budget on the command line still wins.
+    if (tonight.budget_minutes && budget === undefined) cfg.budgetMinutes = tonight.budget_minutes;
+    if (tonight.shorts_share >= 0) cfg.shortsRatio = tonight.shorts_share / 100;
   } catch (e) {
     console.log(`  ! couldn't read tonight's request (${(e as Error).message}); using defaults`);
   }
