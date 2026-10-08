@@ -3,7 +3,8 @@
 //   npm run fixtures:collect [-- --count 25] [-- --force]
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { loadConfig } from "../src/config.ts";
+import { Store } from "../src/store.ts";
+import { evalConfig } from "./eval-config.ts";
 import { addStats, fetchUploads } from "../src/fetch.ts";
 import { classify } from "../src/classify.ts";
 import { score } from "../src/score.ts";
@@ -52,7 +53,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(1);
   }
 
-  const cfg = loadConfig();
+  // The owner's channels, from the database.
+  const { state } = await new Store().state(process.env.TELEGRAM_CHAT_ID ?? "");
+  const cfg = { ...evalConfig(), creators: state.creators.map((c) => ({ id: c.id, name: c.name, priorityWeight: 1 })) };
   const now = new Date();
   const since = new Date(now.getTime() - cfg.backlogDays * 86400_000);
   console.log(`Fetching uploads from ${cfg.creators.length} creators…`);

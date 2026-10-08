@@ -1,7 +1,8 @@
 // Always-on Telegram receiver (Cloudflare Worker).
-// Telegram POSTs every message and button tap here (a webhook) the moment it happens. The worker
-// stores each update for 30 days and replies right away. It also runs onboarding for invited
-// users (with Google sign-in at /oauth/*) and serves per-user data to the daily run (/api/*).
+// Telegram POSTs every message and button tap here (a webhook) the moment it happens, and the
+// worker replies right away. It runs onboarding for invited users (Google sign-in at /oauth/*),
+// commands and settings, saves votes and requests to D1, serves per-user data to the daily run
+// (/api/*), and every hour starts the GitHub run for whoever is due.
 import { parseRequests } from "../src/request.ts";
 import { handleApi } from "./api.ts";
 import * as db from "./db.ts";
@@ -9,14 +10,7 @@ import { authUrl, exchangeCode, mySubscriptions, randomToken, SubsError, verifyC
 import { handleCommand, handleSettingInput, handleSettingsCallback } from "./commands.ts";
 import { handleOnboarding, importCsvDocument, importedFromGoogle, prompt, type OnboardingCtx } from "./onboarding.ts";
 
-interface KV {
-  get(key: string): Promise<string | null>;
-  put(key: string, value: string, opts?: { expirationTtl?: number }): Promise<void>;
-  list(opts: { prefix: string; cursor?: string }): Promise<{ keys: { name: string }[]; list_complete: boolean; cursor?: string }>;
-}
-
 interface Env {
-  EVENTS: KV;
   DB: db.D1;
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_CHAT_ID: string; // the owner's chat
@@ -25,15 +19,12 @@ interface Env {
   YOUTUBE_API_KEY: string;
   ANTHROPIC_API_KEY: string;
   WEBHOOK_SECRET: string; // Telegram sends it back in a header, so only Telegram can post updates
-  EVENTS_TOKEN: string; // the GitHub run's key for reading stored updates
+  EVENTS_TOKEN: string; // the GitHub run's key for /api
   AI_MODEL: string;
   GITHUB_REPO: string; // owner/name
   BOT_USERNAME: string; // for invite links
   GH_DISPATCH_TOKEN: string; // fine-grained token: Actions read & write on this repo only
 }
-
-const KEEP_SECONDS = 30 * 24 * 3600;
-const key = (updateId: number) => `u:${String(updateId).padStart(12, "0")}`;
 
 async function telegram(env: Env, method: string, payload: Record<string, unknown>): Promise<any> {
   const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
@@ -125,19 +116,6 @@ async function handleActive(env: Env, user: db.User, update: any, ctx: Onboardin
   await replyToMessage(env, user.chat_id, m.text, at, whenNext(new Date(), user.timezone, user.delivery_hour));
 }
 
-/** The owner's chat before they've onboarded in v3: works exactly as v2 did. */
-async function handleLegacyOwner(env: Env, update: any) {
-  const q = update.callback_query;
-  if (q) {
-    const vote = String(q.data ?? "").startsWith("u|") ? "👍 Noted: more like this" : "👎 Noted: less like this";
-    await telegram(env, "answerCallbackQuery", { callback_query_id: q.id, text: vote });
-    return;
-  }
-  const m = update.message;
-  if (typeof m?.text !== "string" || m.text.startsWith("/")) return;
-  await replyToMessage(env, env.TELEGRAM_CHAT_ID, m.text, new Date(m.date * 1000).toISOString());
-}
-
 async function handleUpdate(env: Env, update: any, origin: string) {
   const chat = String(update.message?.chat?.id ?? update.callback_query?.message?.chat?.id ?? "");
   if (!chat || (update.message && update.message.chat?.type !== "private")) return; // private chats only
@@ -165,8 +143,7 @@ async function handleUpdate(env: Env, update: any, origin: string) {
   }
 
   if (!user) {
-    if (isOwner) return handleLegacyOwner(env, update);
-    if (update.message) await telegram(env, "sendMessage", { chat_id: chat, text: INVITE_ONLY });
+    if (update.message) await telegram(env, "sendMessage", { chat_id: chat, text: isOwner ? "👋 Send /start to set up." : INVITE_ONLY });
     return;
   }
   if (user.status === "onboarding") return handleOnboarding(ctx, user, update);
@@ -220,20 +197,6 @@ async function oauthCallback(env: Env, url: URL): Promise<Response> {
   }
 }
 
-/** Stored updates with update_id ≥ `after`, oldest first. */
-async function listUpdates(env: Env, after: number) {
-  const names: string[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await env.EVENTS.list({ prefix: "u:", cursor });
-    names.push(...page.keys.map((k) => k.name).filter((n) => n >= key(after)));
-    cursor = page.list_complete ? undefined : page.cursor;
-  } while (cursor);
-  names.sort();
-  const values = await Promise.all(names.map((n) => env.EVENTS.get(n)));
-  return values.filter((v): v is string => v !== null).map((v) => JSON.parse(v));
-}
-
 /** Hourly cron: if anyone's delivery hour has come, start the GitHub run for that exact moment. */
 export async function hourly(env: Env, scheduledTime: number): Promise<string> {
   const at = new Date(scheduledTime);
@@ -267,7 +230,6 @@ export default {
       }
       const update = (await request.json()) as any;
       if (typeof update?.update_id !== "number") return new Response("bad update", { status: 400 });
-      await env.EVENTS.put(key(update.update_id), JSON.stringify(update), { expirationTtl: KEEP_SECONDS });
       // Answer Telegram at once; the reply (which may call Claude) runs after the response.
       ctx.waitUntil(handleUpdate(env, update, url.origin).catch((e) => console.log(`handle failed: ${e}`)));
       return new Response("ok");
@@ -276,14 +238,6 @@ export default {
     if (url.pathname.startsWith("/api/")) return handleApi(request, env);
     if (request.method === "GET" && url.pathname === "/oauth/start") return oauthStart(env, url);
     if (request.method === "GET" && url.pathname === "/oauth/callback") return oauthCallback(env, url);
-
-    if (request.method === "GET" && url.pathname === "/events") {
-      if (request.headers.get("Authorization") !== `Bearer ${env.EVENTS_TOKEN}`) {
-        return new Response("forbidden", { status: 403 });
-      }
-      const after = Number(url.searchParams.get("after") ?? 0);
-      return Response.json({ ok: true, result: await listUpdates(env, Number.isFinite(after) ? after : 0) });
-    }
 
     return new Response("yt-digest bot", { status: 200 });
   },

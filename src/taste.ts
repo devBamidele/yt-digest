@@ -152,12 +152,3 @@ export async function maybeUpdateTaste(model: string, { force = false, log = con
   return true;
 }
 
-// `npm run taste`: rebuild the learned section now.
-if (import.meta.url === `file://${process.argv[1]}`) {
-  try {
-    process.loadEnvFile();
-  } catch {}
-  const { loadConfig } = await import("./config.ts");
-  await maybeUpdateTaste(loadConfig().aiModel, { force: true });
-  console.log(`\n${readFileSync(TASTE_PATH, "utf8")}`);
-}

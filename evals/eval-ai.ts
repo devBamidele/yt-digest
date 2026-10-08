@@ -4,11 +4,12 @@
 //   npm run eval:ai [-- --agent]
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { loadConfig } from "../src/config.ts";
+import { Store } from "../src/store.ts";
+import { evalConfig } from "./eval-config.ts";
 import { scoreVideo } from "../src/score.ts";
 import { fmtDuration, select } from "../src/select.ts";
 import { blend, rate } from "../src/rank.ts";
-import { evidenceFromVotes, learnTaste, renderLearned } from "../src/taste.ts";
+import { evidenceFor, learnTaste, renderLearned } from "../src/taste.ts";
 import type { Video } from "../src/types.ts";
 import { FIXTURES_PATH, type Fixture } from "./collect-fixtures.ts";
 
@@ -20,14 +21,18 @@ const BUDGETS = [30, 60, 90, 120];
 const pct = (n: number, d: number) => (d ? `${Math.round((100 * n) / d)}%` : "n/a");
 const { values } = parseArgs({ options: { agent: { type: "boolean", default: false } } });
 
-const cfg = loadConfig();
+const cfg = evalConfig();
 const fixtures: Fixture[] = JSON.parse(readFileSync(FIXTURES_PATH, "utf8"));
 const labelled = fixtures.filter((f) => typeof f.worth_watching === "boolean");
 const label = new Map(labelled.map((f) => [f.video.videoId, f.worth_watching as boolean]));
 const videos: Video[] = labelled.map((f) => ({ ...f.video, score: scoreVideo(f.video, new Date(f.collectedAt)) }));
 
 // 1. Taste profile from taps only, excluding any tap on a fixture video.
-const evidence = (await evidenceFromVotes()).filter((e) => !videos.some((v) => v.title === e.title));
+// The owner's 👍/👎 from the database.
+const { state } = await new Store().state(process.env.TELEGRAM_CHAT_ID ?? "");
+const evidence = (await evidenceFor(state.votes.map((v) => ({ videoId: v.video_id, vote: v.vote })))).filter(
+  (e) => !videos.some((v) => v.title === e.title),
+);
 console.log(`Building a taste profile from ${evidence.length} taps (none of them on the ${videos.length} labelled videos)…`);
 const learned = await learnTaste(evidence, "", cfg.aiModel);
 const taste = `My own notes:\n(none)\n\nLearned from my feedback:\n${renderLearned(learned, evidence.length).replace(/<!--[\s\S]*?-->/g, "")}`;

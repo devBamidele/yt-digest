@@ -2,7 +2,7 @@
 // Fails (exit 1) if any selection exceeds its budget.
 //   npm run eval:select
 import { readFileSync } from "node:fs";
-import { loadConfig } from "../src/config.ts";
+import { evalConfig } from "./eval-config.ts";
 import { scoreVideo } from "../src/score.ts";
 import { fmtDuration, select } from "../src/select.ts";
 import { FIXTURES_PATH, type Fixture } from "./collect-fixtures.ts";
@@ -10,7 +10,7 @@ import { FIXTURES_PATH, type Fixture } from "./collect-fixtures.ts";
 const BUDGETS = [30, 60, 90, 120];
 const pct = (n: number, d: number) => (d ? `${Math.round((100 * n) / d)}%` : "n/a");
 
-const cfg = loadConfig();
+const cfg = evalConfig();
 const fixtures: Fixture[] = JSON.parse(readFileSync(FIXTURES_PATH, "utf8"));
 const labelled = fixtures.filter((f) => typeof f.worth_watching === "boolean");
 const label = new Map(labelled.map((f) => [f.video.videoId, f.worth_watching]));

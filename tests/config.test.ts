@@ -1,13 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig, parseConfig } from "../src/config.ts";
+import { loadAppConfig, parseConfig } from "../src/config.ts";
 
 const ID = "UCsBjURrPoezykLs9EqgamOA";
 
-test("real creators.yaml loads", () => {
-  const cfg = loadConfig();
-  assert.ok(cfg.creators.length > 0);
-  assert.equal(cfg.creators.find((c) => c.name === "Fireship")?.priorityWeight, 1);
+test("config.yaml loads app-wide defaults (no channels or personal settings)", () => {
+  const cfg = loadAppConfig();
+  assert.equal(cfg.mode, "agent");
+  assert.ok(cfg.userDailyCapUsd > 0);
+  assert.ok(!("creators" in cfg));
 });
 
 test("defaults apply", () => {

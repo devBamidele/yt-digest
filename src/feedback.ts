@@ -145,10 +145,3 @@ export function weightsFromVotes(votes: { channelId: string; vote: "up" | "down"
   return out;
 }
 
-// `npm run feedback`: collect taps only (the 6am run), so none expire before the evening digest.
-if (import.meta.url === `file://${process.argv[1]}`) {
-  try {
-    process.loadEnvFile();
-  } catch {}
-  await collectFeedback();
-}

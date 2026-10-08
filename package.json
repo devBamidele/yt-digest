@@ -7,15 +7,11 @@
     "node": ">=20"
   },
   "scripts": {
-    "digest": "tsx src/main.ts",
     "test": "tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "import-subs": "tsx src/import-subs.ts",
     "fixtures:collect": "tsx evals/collect-fixtures.ts",
     "eval:select": "tsx evals/eval-select.ts",
     "eval:summaries": "tsx evals/eval-summaries.ts",
-    "feedback": "tsx src/feedback.ts",
-    "taste": "tsx src/taste.ts",
     "eval:ai": "tsx evals/eval-ai.ts",
     "worker:deploy": "wrangler deploy --config worker/wrangler.toml",
     "worker:logs": "wrangler tail --config worker/wrangler.toml",

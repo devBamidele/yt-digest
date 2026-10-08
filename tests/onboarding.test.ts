@@ -15,7 +15,6 @@ before(async () => {
   proxy = await getPlatformProxy({ configPath: "worker/wrangler.toml", persist: false });
   env = {
     ...(proxy.env as any),
-    EVENTS: { put: async () => {}, get: async () => null, list: async () => ({ keys: [], list_complete: true }) },
     TELEGRAM_BOT_TOKEN: "t", TELEGRAM_CHAT_ID: "1", WEBHOOK_SECRET: "hook", EVENTS_TOKEN: "pull",
     GOOGLE_WEB_CLIENT_ID: "cid", BOT_USERNAME: "test_bot", GOOGLE_WEB_CLIENT_SECRET: "sec", YOUTUBE_API_KEY: "yk", ANTHROPIC_API_KEY: "ak", AI_MODEL: "m",
   };

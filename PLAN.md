@@ -183,3 +183,7 @@ Commands after: `/settings`, `/sync` (re-import subscriptions), `/pause` / `/res
 ### What I need to do
 - Google Cloud: create an OAuth client of type **Web application** with redirect URI `https://yt-digest-bot.bamideledavid-ajewole.workers.dev/oauth/callback`; add each friend's Google email under Audience → Test users (max 100).
 - GitHub: a fine-grained token with "Actions: read and write" on this repo only, so Cloudflare can start runs.
+
+### Status (2026-10-08): v3 live
+Steps 1–6 done. The single-user v2 path is retired (src/main.ts, the terminal importer, the laptop Google sign-in, digest.yml and feedback.yml, creators.yaml and state/ are gone; raw update storage in KV removed). All data was wiped; the 25 hand labels in evals/fixtures/ were kept. Evals read config.yaml and the owner's channels/votes from the database.
+Everyone (owner included) now onboards with /start in the bot.
