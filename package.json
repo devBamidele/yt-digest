@@ -16,7 +16,9 @@
     "eval:summaries": "tsx evals/eval-summaries.ts",
     "feedback": "tsx src/feedback.ts",
     "taste": "tsx src/taste.ts",
-    "eval:ai": "tsx evals/eval-ai.ts"
+    "eval:ai": "tsx evals/eval-ai.ts",
+    "worker:deploy": "wrangler deploy --config worker/wrangler.toml",
+    "worker:logs": "wrangler tail --config worker/wrangler.toml"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.132.1",
@@ -26,6 +28,7 @@
   "devDependencies": {
     "@types/node": "^26.6.4",
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "wrangler": "^4.86.0"
   }
 }

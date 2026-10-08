@@ -63,17 +63,33 @@ export function applyUpdates(state: FeedbackState, updates: any[], chatId: strin
   return { up, down };
 }
 
-/** Fetches pending taps from Telegram and records them. Returns how many arrived this time. */
+/**
+ * Updates with update_id ≥ offset. With the always-on receiver (EVENTS_URL + EVENTS_TOKEN), they come
+ * from its store; otherwise straight from Telegram's getUpdates (which only keeps them 24 hours).
+ */
+async function fetchUpdates(token: string, offset: number): Promise<{ result: any[] }> {
+  const url = process.env.EVENTS_URL;
+  const key = process.env.EVENTS_TOKEN;
+  let res: Response;
+  if (url && key) {
+    res = await fetch(`${url.replace(/\/$/, "")}/events?after=${offset}`, { headers: { Authorization: `Bearer ${key}` } });
+  } else {
+    const qs = new URLSearchParams({ offset: String(offset), allowed_updates: JSON.stringify(["callback_query", "message"]) });
+    res = await fetch(`https://api.telegram.org/bot${token}/getUpdates?${qs}`);
+  }
+  const body = await res.json().catch(() => ({ ok: false, description: `HTTP ${res.status}` }));
+  if (!body.ok) throw new Error(`fetching updates failed: ${body.description ?? res.status}`);
+  return body;
+}
+
+/** Fetches pending taps and messages and records them. Returns how many taps arrived this time. */
 export async function collectFeedback(log = console.log) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
   if (!token || !chatId) throw new Error("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set");
 
   const state = loadFeedback();
-  const qs = new URLSearchParams({ offset: String(state.offset), allowed_updates: JSON.stringify(["callback_query", "message"]) });
-  const res = await fetch(`https://api.telegram.org/bot${token}/getUpdates?${qs}`);
-  const body = await res.json();
-  if (!body.ok) throw new Error(`Telegram getUpdates failed: ${body.description ?? res.status}`);
+  const body = await fetchUpdates(token, state.offset);
 
   const counts = applyUpdates(state, body.result, chatId);
   const since = state.sinceDigest ?? { up: 0, down: 0 };
