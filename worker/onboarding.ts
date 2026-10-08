@@ -154,8 +154,26 @@ async function imported(ctx: OnboardingCtx, chatId: string, subs: Sub[], how: st
     return;
   }
   const n = await db.replaceCreators(ctx.db, chatId, subs);
+  const user = await db.getUser(ctx.db, chatId);
+  if (user && user.status !== "onboarding") {
+    // /sync from someone already set up: just replace the list.
+    await db.updateUser(ctx.db, chatId, { step: "done" });
+    await ctx.tg("sendMessage", { chat_id: chatId, text: `✅ Updated: ${n} channels ${how}. Your next digest uses the new list.` });
+    return;
+  }
   await ctx.tg("sendMessage", { chat_id: chatId, text: `✅ Found ${n} channels ${how}.` });
   await advance(ctx, chatId, "connect");
+}
+
+/** A Takeout subscriptions.csv sent as a Telegram document (setup or /sync). */
+export async function importCsvDocument(ctx: OnboardingCtx, chatId: string, document: any): Promise<void> {
+  if (!/\.csv$/i.test(document?.file_name ?? "")) {
+    await ctx.tg("sendMessage", { chat_id: chatId, text: "Please send the <code>subscriptions.csv</code> file from your Takeout export.", parse_mode: "HTML" });
+    return;
+  }
+  const file = await ctx.tg("getFile", { file_id: document.file_id });
+  const res = await fetch(`https://api.telegram.org/file/bot${ctx.botToken}/${file?.result?.file_path}`);
+  return imported(ctx, chatId, subsFromCsv(await res.text()), "in your Takeout file");
 }
 
 /** Called by /oauth/callback once Google sign-in returned the subscriptions. */
@@ -198,12 +216,7 @@ export async function handleOnboarding(ctx: OnboardingCtx, user: db.User, update
 
   switch (user.step) {
     case "connect": {
-      if (m.document) {
-        if (!/\.csv$/i.test(m.document.file_name ?? "")) return void (await reply("Please send the <code>subscriptions.csv</code> file from your Takeout export."));
-        const file = await ctx.tg("getFile", { file_id: m.document.file_id });
-        const res = await fetch(`https://api.telegram.org/file/bot${ctx.botToken}/${file?.result?.file_path}`);
-        return imported(ctx, chatId, subsFromCsv(await res.text()), "in your Takeout file");
-      }
+      if (m.document) return importCsvDocument(ctx, chatId, m.document);
       if (/^@|youtube\.com\/@/.test(text)) {
         try {
           return await imported(ctx, chatId, await subscriptionsForHandle(text, ctx.youtubeApiKey), `for ${text.replace(/^.*\/(?=@)/, "")}`);

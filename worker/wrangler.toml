@@ -7,6 +7,7 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 AI_MODEL = "claude-opus-5-5"
 GITHUB_REPO = "devBamidele/yt-digest"
+BOT_USERNAME = "dele_yt_digest_bot"
 
 # Every hour on the hour: start the GitHub run for whoever's delivery hour it is.
 [triggers]

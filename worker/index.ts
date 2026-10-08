@@ -6,7 +6,8 @@ import { parseRequests } from "../src/request.ts";
 import { handleApi } from "./api.ts";
 import * as db from "./db.ts";
 import { authUrl, exchangeCode, mySubscriptions, randomToken, SubsError, verifyConnect } from "./google.ts";
-import { handleOnboarding, importedFromGoogle, prompt, type OnboardingCtx } from "./onboarding.ts";
+import { handleCommand, handleSettingInput, handleSettingsCallback } from "./commands.ts";
+import { handleOnboarding, importCsvDocument, importedFromGoogle, prompt, type OnboardingCtx } from "./onboarding.ts";
 
 interface KV {
   get(key: string): Promise<string | null>;
@@ -27,6 +28,7 @@ interface Env {
   EVENTS_TOKEN: string; // the GitHub run's key for reading stored updates
   AI_MODEL: string;
   GITHUB_REPO: string; // owner/name
+  BOT_USERNAME: string; // for invite links
   GH_DISPATCH_TOKEN: string; // fine-grained token: Actions read & write on this repo only
 }
 
@@ -89,11 +91,17 @@ function onboardingCtx(env: Env, origin: string): OnboardingCtx {
 
 const INVITE_ONLY = "👋 This bot is invite-only. If someone sent you an invite link, open it to get started.";
 
-/** Votes and requests from someone who has finished setup. */
-async function handleActive(env: Env, user: db.User, update: any) {
+/** Votes, commands, settings and requests from someone who has finished setup. */
+async function handleActive(env: Env, user: db.User, update: any, ctx: OnboardingCtx) {
   const q = update.callback_query;
   if (q) {
-    const [v, videoId, channelId] = String(q.data ?? "").split("|");
+    const data = String(q.data ?? "");
+    if (data.startsWith("set|") || data.startsWith("del|")) {
+      await telegram(env, "answerCallbackQuery", { callback_query_id: q.id });
+      await handleSettingsCallback(ctx, user, data);
+      return;
+    }
+    const [v, videoId, channelId] = data.split("|");
     if ((v === "u" || v === "d") && videoId && channelId) {
       await db.recordVote(env.DB, user.chat_id, videoId, channelId, v === "u" ? "up" : "down");
       await telegram(env, "answerCallbackQuery", { callback_query_id: q.id, text: v === "u" ? "👍 Noted: more like this" : "👎 Noted: less like this" });
@@ -103,7 +111,15 @@ async function handleActive(env: Env, user: db.User, update: any) {
     return;
   }
   const m = update.message;
-  if (typeof m?.text !== "string" || m.text.startsWith("/")) return; // commands come in step 5
+  if (m?.document && user.step === "sync") return importCsvDocument(ctx, user.chat_id, m.document);
+  if (typeof m?.text !== "string") return;
+  if (m.text.startsWith("/")) {
+    if (!(await handleCommand(ctx, user, m.text, env.BOT_USERNAME))) {
+      await telegram(env, "sendMessage", { chat_id: user.chat_id, text: "I don't know that command. Try /help." });
+    }
+    return;
+  }
+  if (user.step.startsWith("set_") && (await handleSettingInput(ctx, user, m.text))) return;
   const at = new Date(m.date * 1000).toISOString();
   await db.addRequest(env.DB, user.chat_id, m.text, at);
   await replyToMessage(env, user.chat_id, m.text, at, whenNext(new Date(), user.timezone, user.delivery_hour));
@@ -134,7 +150,7 @@ async function handleUpdate(env: Env, update: any, origin: string) {
     const code = text.split(/\s+/)[1];
     if (user) {
       if (user.status === "onboarding") return prompt(ctx, user);
-      return void (await telegram(env, "sendMessage", { chat_id: chat, text: "👋 You're all set up. Message me to change a day, or use /settings." }));
+      return void (await handleCommand(ctx, user, "/help", env.BOT_USERNAME));
     }
     const allowed = (code && (await db.redeemInvite(env.DB, code, chat))) || isOwner;
     if (!allowed) return void (await telegram(env, "sendMessage", { chat_id: chat, text: INVITE_ONLY }));
@@ -154,7 +170,7 @@ async function handleUpdate(env: Env, update: any, origin: string) {
     return;
   }
   if (user.status === "onboarding") return handleOnboarding(ctx, user, update);
-  return handleActive(env, user, update);
+  return handleActive(env, user, update, ctx);
 }
 
 const page = (title: string, body: string, status = 200) =>
@@ -170,7 +186,7 @@ async function oauthStart(env: Env, url: URL): Promise<Response> {
   const chatId = url.searchParams.get("u") ?? "";
   if (!(await verifyConnect(chatId, url.searchParams.get("sig") ?? "", env.WEBHOOK_SECRET))) return page("Link not valid", "Open the Connect YouTube button from the bot again.", 403);
   const user = await db.getUser(env.DB, chatId);
-  if (!user || user.step !== "connect") return page("Already connected", "You can close this tab and go back to Telegram.");
+  if (!user || (user.step !== "connect" && user.step !== "sync")) return page("Already connected", "You can close this tab and go back to Telegram.");
   const state = randomToken(24);
   const verifier = randomToken(48);
   await db.putOAuthState(env.DB, state, chatId, verifier);

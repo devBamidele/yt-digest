@@ -17,7 +17,7 @@ before(async () => {
     ...(proxy.env as any),
     EVENTS: { put: async () => {}, get: async () => null, list: async () => ({ keys: [], list_complete: true }) },
     TELEGRAM_BOT_TOKEN: "t", TELEGRAM_CHAT_ID: "1", WEBHOOK_SECRET: "hook", EVENTS_TOKEN: "pull",
-    GOOGLE_WEB_CLIENT_ID: "cid", GOOGLE_WEB_CLIENT_SECRET: "sec", YOUTUBE_API_KEY: "yk", ANTHROPIC_API_KEY: "ak", AI_MODEL: "m",
+    GOOGLE_WEB_CLIENT_ID: "cid", BOT_USERNAME: "test_bot", GOOGLE_WEB_CLIENT_SECRET: "sec", YOUTUBE_API_KEY: "yk", ANTHROPIC_API_KEY: "ak", AI_MODEL: "m",
   };
   for (const s of readFileSync("worker/schema.sql", "utf8").replace(/--.*$/gm, "").split(";").map((x) => x.trim()).filter(Boolean)) {
     await env.DB.prepare(s).run();
@@ -149,4 +149,64 @@ test("parsing typed times and time zones", () => {
   assert.equal(parseTimezone("Narnia"), null);
   assert.equal(firstDigestDay("Africa/Lagos", 18, new Date("2026-10-09T10:00:00Z")), "today");
   assert.equal(firstDigestDay("Africa/Lagos", 18, new Date("2026-10-09T20:00:00Z")), "tomorrow");
+});
+
+test("/settings: buttons change watch time and mix; typed answers change time and time zone", async () => {
+  sent = [];
+  await msg("200", "/settings");
+  assert.match(lastText(), /Your settings[\s\S]*Watch time: 90 min/);
+  await tap("200", "set|budget");
+  await tap("200", "set|budget|120");
+  assert.match(lastText(), /✓ Watch time: 120 min/);
+  await tap("200", "set|mix|long");
+  await tap("200", "set|hour");
+  await msg("200", "7am");
+  assert.match(lastText(), /✓ Delivery time: 07:00/);
+  await tap("200", "set|timezone");
+  await msg("200", "London");
+  const u = (await db.getUser(env.DB, "200"))!;
+  assert.deepEqual([u.budget_minutes, u.shorts_ratio, u.delivery_hour, u.timezone, u.step], [120, 0.2, 7, "Europe/London", "done"]);
+  // Typed setting answers are not saved as requests.
+  assert.equal((await db.userState(env.DB, "200"))!.requests.length, 0);
+});
+
+test("/pause stops digests, /resume restarts them", async () => {
+  await msg("200", "/pause");
+  assert.equal((await db.getUser(env.DB, "200"))!.status, "paused");
+  assert.ok(!(await db.dueUsers(env.DB, new Date("2026-10-10T06:00:00Z"))).some((u) => u.chat_id === "200")); // 07:00 London
+  await msg("200", "/resume");
+  assert.ok((await db.dueUsers(env.DB, new Date("2026-10-10T06:00:00Z"))).some((u) => u.chat_id === "200"));
+});
+
+test("/sync asks to sign in again and replaces the channel list without redoing setup", async () => {
+  sent = [];
+  await msg("200", "/sync");
+  assert.match(sent.at(-1)!.body.reply_markup.inline_keyboard[0][0].url, /oauth\/start\?u=200/);
+  await importedFromGoogle({ db: env.DB, tg: async (m, b) => void sent.push({ method: m, body: b }), origin: "https://bot.example", secret: "hook", youtubeApiKey: "", botToken: "t" }, "200", [{ id: "UCz", name: "Z" }]);
+  assert.match(lastText(), /Updated: 1 channels/);
+  const u = (await db.getUser(env.DB, "200"))!;
+  assert.deepEqual([u.status, u.step], ["active", "done"]);
+});
+
+test("owner-only commands: /invite and /users", async () => {
+  sent = [];
+  await msg("200", "/invite"); // not the owner
+  assert.match(lastText(), /don't know that command/);
+  await db.updateUser(env.DB, "1", { status: "active", step: "done" });
+  await msg("1", "/invite");
+  assert.match(lastText(), /https:\/\/t\.me\/test_bot\?start=[\w-]{12}/);
+  await msg("1", "/users");
+  assert.match(lastText(), /Ada: active, 1 channels, 07:00 Europe\/London/);
+});
+
+test("/delete asks first, then erases everything", async () => {
+  await msg("200", "/delete");
+  await tap("200", "del|no");
+  assert.ok(await db.getUser(env.DB, "200"));
+  await tap("200", "del|yes");
+  assert.equal(await db.getUser(env.DB, "200"), null);
+  assert.match(lastText(), /Everything about you is deleted/);
+  sent = [];
+  await msg("200", "hello?");
+  assert.match(lastText(), /invite-only/);
 });
