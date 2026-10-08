@@ -156,6 +156,10 @@ Decisions: invite-only for me + up to ~5 friends; I pay for Claude with a per-us
 | Pipeline | One user, reads/writes files | Same code, per user, reading/writing through the receiver's private API. Channel feeds and summaries are fetched/generated **once** and shared |
 | Costs | Uncapped | Per-user daily Claude cap; past it: AI ranking with a cheaper model, then formula only. Owner exempt |
 
+### Config
+`creators.yaml` is removed. Channel lists and personal settings (watch time, shorts mix, delivery time, time zone) live per user in D1: channels come from each person's YouTube (onboarding and `/sync`), settings from buttons (`/settings`). A small `config.yaml` keeps only app-wide defaults (models, per-creator cap, length limits, per-user cost cap). Manual per-channel `priority_weight` goes away; 👍/👎 does that job per person.
+Subscription import errors get friendly bot messages: `subscriptionForbidden`, `accountClosed`, `accountSuspended`, `subscriberNotFound`.
+
 ### D1 tables
 `users` (chat_id, name, status onboarding/active/paused, onboarding step, timezone, delivery_hour, budget_minutes, shorts_ratio, mode, is_owner), `invites` (code, used_by), `creators` (chat_id, channel_id, name, priority_weight), `votes`, `sent`, `requests`, `taste` (notes, learned, votes_used), `agent_notes`, `ratings` (per user), `summaries` (shared by video), `usage` (chat_id, day, cost), `oauth_states` (short-lived).
 
@@ -174,7 +178,7 @@ Commands after: `/settings`, `/sync` (re-import subscriptions), `/pause` / `/res
 3. Pipeline per user via the API; shared feed fetch and summary cache; per-user caps.
 4. Cloudflare hourly cron → GitHub `workflow_dispatch` with the due users; GitHub's own cron removed.
 5. Commands (`/settings`, `/sync`, `/pause`, `/delete`, `/invite`, `/users`).
-6. Wipe old data (state/, KV), onboard me fresh, then invite friends.
+6. **Full wipe** (decided 2026-10-08): delete state/ (votes, taste, requests, sent history, caches), the receiver's stored updates and local logs; keep `evals/fixtures/` (test data). Then onboard me through the bot like any new user, then invite friends.
 
 ### What I need to do
 - Google Cloud: create an OAuth client of type **Web application** with redirect URI `https://yt-digest-bot.bamideledavid-ajewole.workers.dev/oauth/callback`; add each friend's Google email under Audience → Test users (max 100).

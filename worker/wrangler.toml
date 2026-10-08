@@ -14,3 +14,9 @@ id = "5e1f8311120941f0b46f3ffa25e53642"
 
 # Secrets (set with `npx wrangler secret put NAME`, never committed):
 # TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ANTHROPIC_API_KEY, WEBHOOK_SECRET, EVENTS_TOKEN
+
+# Per-user data (v3). Created with: npx wrangler d1 create yt_digest
+[[d1_databases]]
+binding = "DB"
+database_name = "yt_digest"
+database_id = "efde78cb-07df-4cef-82a7-ffc967c6d464"

@@ -18,7 +18,8 @@
     "taste": "tsx src/taste.ts",
     "eval:ai": "tsx evals/eval-ai.ts",
     "worker:deploy": "wrangler deploy --config worker/wrangler.toml",
-    "worker:logs": "wrangler tail --config worker/wrangler.toml"
+    "worker:logs": "wrangler tail --config worker/wrangler.toml",
+    "db:migrate": "wrangler d1 execute yt_digest --remote --config worker/wrangler.toml --file worker/schema.sql"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.132.1",

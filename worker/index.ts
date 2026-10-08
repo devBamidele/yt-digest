@@ -3,6 +3,8 @@
 // stores each update for 30 days, replies right away, and serves the stored updates to the daily
 // GitHub run, which then processes them exactly as it used to process getUpdates.
 import { parseRequests } from "../src/request.ts";
+import { handleApi } from "./api.ts";
+import type { D1 } from "./db.ts";
 
 interface KV {
   get(key: string): Promise<string | null>;
@@ -12,6 +14,7 @@ interface KV {
 
 interface Env {
   EVENTS: KV;
+  DB: D1;
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_CHAT_ID: string;
   ANTHROPIC_API_KEY: string;
@@ -114,6 +117,8 @@ export default {
       ctx.waitUntil(handleUpdate(env, update).catch((e) => console.log(`handle failed: ${e}`)));
       return new Response("ok");
     }
+
+    if (url.pathname.startsWith("/api/")) return handleApi(request, env);
 
     if (request.method === "GET" && url.pathname === "/events") {
       if (request.headers.get("Authorization") !== `Bearer ${env.EVENTS_TOKEN}`) {
