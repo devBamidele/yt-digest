@@ -1,0 +1,28 @@
+{
+  "name": "yt-digest",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "digest": "tsx src/main.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "import-subs": "tsx src/import-subs.ts",
+    "fixtures:collect": "tsx evals/collect-fixtures.ts",
+    "eval:select": "tsx evals/eval-select.ts",
+    "eval:summaries": "tsx evals/eval-summaries.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.132.1",
+    "fast-xml-parser": "^5.11.2",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

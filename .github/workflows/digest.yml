@@ -1,0 +1,75 @@
+name: Daily YouTube digest
+
+on:
+  schedule:
+    - cron: "0 17 * * *" # 17:00 UTC = 18:00 in Lagos (WAT has no daylight saving)
+  workflow_dispatch:
+    inputs:
+      budget:
+        description: "Time budget in minutes (blank = creators.yaml default)"
+        required: false
+      dry_run:
+        description: "Preview only: don't send to Telegram"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # to commit state/ (sent videos, summary cache) back to the repo
+
+concurrency:
+  group: digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Offline checks first: a broken build or an over-budget selector never sends.
+      - name: Tests
+        run: npm test
+      - name: Selection eval (fails if any budget is exceeded)
+        run: npm run eval:select
+
+      - name: Build and send digest
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BUDGET: ${{ inputs.budget }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=()
+          [ -n "$BUDGET" ] && args+=(--budget "$BUDGET")
+          [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
+          npm run digest -- "${args[@]}"
+
+      - name: Upload run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-log-${{ github.run_id }}
+          path: logs/
+          retention-days: 90
+          if-no-files-found: ignore
+
+      - name: Save state (sent videos, summary cache)
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/
+          git diff --cached --quiet && exit 0
+          git commit -m "Update digest state ($(TZ=Africa/Lagos date +%F))"
+          for i in 1 2 3; do git pull --rebase && git push && exit 0; sleep 5; done
+          exit 1
