@@ -139,3 +139,43 @@ Next: turn accumulated 👍/👎 into eval labels so the comparison stops restin
 - ~~Summary model~~: decided by eval, Claude Sonnet 5.5.
 - ~~Look-back window~~: replaced by the backlog (7 days, minus already-sent videos).
 - Minimum score, so weak videos aren't sent just to fill time? (To be decided from eval results.)
+
+---
+
+## 10. v3: invite-only, multiple users (planned 2026-10-08)
+
+Decisions: invite-only for me + up to ~5 friends; I pay for Claude with a per-user daily cap; each person picks their own delivery time and time zone. Then wipe all current data and onboard myself fresh through the bot.
+
+### Architecture
+| Piece | Today | v3 |
+|---|---|---|
+| State | JSON/markdown files in `state/`, committed to the repo | **Cloudflare D1** (SQL) next to the receiver; nothing personal in git |
+| Telegram | Receiver only accepts my chat | Receiver serves any **invited** chat; everyone else gets "this bot is invite-only" |
+| Onboarding | I edit files and run scripts | Guided in the bot (below) |
+| Schedule | GitHub cron at 17:00 UTC (late or skipped) | **Cloudflare cron, hourly on the dot** → starts the GitHub run with the users due that hour |
+| Pipeline | One user, reads/writes files | Same code, per user, reading/writing through the receiver's private API. Channel feeds and summaries are fetched/generated **once** and shared |
+| Costs | Uncapped | Per-user daily Claude cap; past it: AI ranking with a cheaper model, then formula only. Owner exempt |
+
+### D1 tables
+`users` (chat_id, name, status onboarding/active/paused, onboarding step, timezone, delivery_hour, budget_minutes, shorts_ratio, mode, is_owner), `invites` (code, used_by), `creators` (chat_id, channel_id, name, priority_weight), `votes`, `sent`, `requests`, `taste` (notes, learned, votes_used), `agent_notes`, `ratings` (per user), `summaries` (shared by video), `usage` (chat_id, day, cost), `oauth_states` (short-lived).
+
+### Onboarding in the bot
+1. `t.me/<bot>?start=<invite code>` → welcome. (No code or used code → invite-only message.)
+2. **Connect YouTube** button → Google sign-in in the browser → the receiver's `/oauth/callback` imports subscriptions (read-only scope, token used once and not stored) → "Found 154 channels ✓".
+   Fallbacks if Google refuses (not on the test-user list): send `subscriptions.csv` from Takeout, or an @handle with public subscriptions.
+3. Buttons: default watch time (30/60/90/120), shorts mix (mostly long / balanced / mostly shorts), delivery time (common hours) + time zone (city or UTC offset).
+4. "Tell me what you're into" (free text → taste "My notes"; can skip).
+5. "You're set: first digest at 18:00 (Africa/Lagos)."
+Commands after: `/settings`, `/sync` (re-import subscriptions), `/pause` / `/resume`, `/delete` (erase everything about me), `/help`; owner only: `/invite`, `/users`.
+
+### Build steps (each tested before the next)
+1. D1 schema + data layer + receiver API (`/api/...`, bearer-token protected).
+2. Onboarding state machine + Google web sign-in + CSV fallback; test end to end with me.
+3. Pipeline per user via the API; shared feed fetch and summary cache; per-user caps.
+4. Cloudflare hourly cron → GitHub `workflow_dispatch` with the due users; GitHub's own cron removed.
+5. Commands (`/settings`, `/sync`, `/pause`, `/delete`, `/invite`, `/users`).
+6. Wipe old data (state/, KV), onboard me fresh, then invite friends.
+
+### What I need to do
+- Google Cloud: create an OAuth client of type **Web application** with redirect URI `https://yt-digest-bot.bamideledavid-ajewole.workers.dev/oauth/callback`; add each friend's Google email under Audience → Test users (max 100).
+- GitHub: a fine-grained token with "Actions: read and write" on this repo only, so Cloudflare can start runs.
