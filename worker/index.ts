@@ -250,6 +250,7 @@ async function importSubscriptions(env: Env, url: URL): Promise<void> {
 /** Cron (every 5 minutes): if anyone's delivery time has come, start the GitHub run for that exact moment. */
 export async function hourly(env: Env, scheduledTime: number): Promise<string> {
   const at = new Date(scheduledTime);
+  await db.setState(env.DB, "last_check", at.toISOString()); // heartbeat: proves the schedule is running
   const due = await db.dueUsers(env.DB, at);
   if (!due.length) return "nobody due";
   const res = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/users.yml/dispatches`, {

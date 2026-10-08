@@ -80,7 +80,10 @@ export async function handleCommand(ctx: OnboardingCtx, u: db.User, text: string
           return `• ${x.name || x.chat_id}: ${x.status}${x.status === "onboarding" ? ` (${x.step})` : ""}, ${st?.creators.length ?? 0} channels, ${at(x)} ${x.timezone}, $${cost.toFixed(2)} today`;
         }),
       );
-      await send(ctx, chat, `👥 <b>Users</b>\n\n${lines.join("\n") || "(none)"}`);
+      const last = await db.getState(ctx.db, "last_check");
+      const ago = last ? Math.round((Date.now() - Date.parse(last)) / 60_000) : null;
+      const health = ago === null ? "⚠️ no scheduled check recorded yet" : ago <= 10 ? `✅ last scheduled check ${ago} min ago` : `⚠️ last scheduled check ${ago} min ago (should be every 5)`;
+      await send(ctx, chat, `👥 <b>Users</b>\n\n${lines.join("\n") || "(none)"}\n\n${health}`);
       return true;
     }
   }

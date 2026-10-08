@@ -265,6 +265,16 @@ export async function deleteUser(db: D1, chatId: string) {
   await db.batch(tables.map((t) => db.prepare(`DELETE FROM ${t} WHERE chat_id = ?`).bind(chatId)));
 }
 
+// ---------- health ----------
+
+export async function setState(db: D1, key: string, value: string) {
+  await db.prepare("INSERT INTO app_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").bind(key, value).run();
+}
+
+export async function getState(db: D1, key: string): Promise<string | null> {
+  return (await db.prepare("SELECT value FROM app_state WHERE key = ?").bind(key).first<{ value: string }>())?.value ?? null;
+}
+
 // ---------- owner alerts ----------
 
 /** True (and records the time) if no alert with this key was sent in the last `minutes`. */
