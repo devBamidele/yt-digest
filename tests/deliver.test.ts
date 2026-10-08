@@ -18,7 +18,7 @@ test("header, one message per video (long-form first) with its own buttons, then
   const picked = [vid(2, "short"), vid(1, "long")];
   const msgs = formatDigest(sel(picked), picked, 60, "Thu 8 Oct");
   assert.equal(msgs.length, 4);
-  assert.match(msgs[0].text, /^📺 <b>Your YouTube digest<\/b> · Thu 8 Oct · 60 min\n🎬 1 videos \(10:00\) · ⚡ 1 shorts \(0:45\)$/);
+  assert.equal(msgs[0].text, "📺 <b>Your YouTube digest</b>\nThu 8 Oct · 60 min\n\n🎬 1 video · 10:00   ⚡ 1 short · 0:45");
   assert.equal(msgs[0].video, undefined);
   assert.equal(msgs[1].video?.videoId, "id1");
   assert.match(msgs[1].text, /^🎬 <b>1\. <a href="https:\/\/youtu.be\/id1">Title 1<\/a><\/b>\nCreator 1 · 10:00\nSummary 1\.$/);
@@ -55,9 +55,24 @@ test("buttons: one 👍/👎 row per video, payload fits Telegram's 64 bytes and
   assert.deepEqual(parseCallback(data), { vote: "down", videoId: "abcdefghij1", channelId: "UCsBjURrPoezykLs9EqgamOA" });
 });
 
-test("feedback line shows under the header", () => {
-  const picked = [vid(1, "long")];
-  assert.match(formatDigest(sel(picked), picked, 60, "d", "Got your feedback: 2 👍, 1 👎")[0].text, /<i>Got your feedback: 2 👍, 1 👎<\/i>/);
+test("header: intro, request and feedback each get their own block; empty kinds are left out", () => {
+  const picked = Array.from({ length: 30 }, (_, i) => vid(i, "short", { durationSeconds: 85 }));
+  const [{ text }] = formatDigest(sel(picked), picked, 45, "Thu 8 Oct", {
+    intro: "Tonight is mostly comedy.",
+    request: "45 min, only shorts, funny content",
+    taps: { up: 4, down: 4 },
+  });
+  assert.equal(
+    text,
+    [
+      "📺 <b>Your YouTube digest</b>\nThu 8 Oct · 45 min",
+      "<i>Tonight is mostly comedy.</i>",
+      "🎯 Tonight: 45 min, only shorts, funny content (as you asked)\n🙏 Got your feedback: 4 👍, 4 👎. Thanks!",
+      "⚡ 30 shorts · 42:30",
+    ].join("\n\n"),
+  );
+  // No taps and no request: those lines don't appear at all.
+  assert.doesNotMatch(formatDigest(sel(picked), picked, 45, "d", { taps: { up: 0, down: 0 } })[0].text, /Got your feedback|Tonight:/);
 });
 
 test("delivery marks each video as soon as its message is sent, and stops at a failure", async () => {

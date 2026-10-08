@@ -36,25 +36,45 @@ function item(v: Video, n: number): string {
     .join("\n");
 }
 
+export interface HeaderExtras {
+  intro?: string; // the agent's one-line overview of tonight
+  request?: string; // what it understood from my messages, e.g. "45 min, only shorts"
+  taps?: { up: number; down: number }; // feedback collected since the last digest
+}
+
+/** "🎬 3 videos · 35:12   ⚡ 14 shorts · 22:10", leaving out a kind with none. */
+function counts(long: Video[], shorts: Video[]): string {
+  const sum = (vs: Video[]) => fmtDuration(vs.reduce((a, v) => a + (v.durationSeconds ?? 0), 0));
+  const part = (icon: string, n: number, noun: string, vs: Video[]) => `${icon} ${n} ${n === 1 ? noun : `${noun}s`} · ${sum(vs)}`;
+  return [long.length && part("🎬", long.length, "video", long), shorts.length && part("⚡", shorts.length, "short", shorts)]
+    .filter(Boolean)
+    .join("   ");
+}
+
 /** Header message, one message per video (long-form first, then shorts), then the total. */
 export function formatDigest(
   sel: Selection,
   picked: Video[],
   budgetMinutes: number,
   date: string,
-  feedbackLine?: string,
+  extras: HeaderExtras = {},
 ): DigestMessage[] {
-  let header = `📺 <b>Your YouTube digest</b> · ${date} · ${budgetMinutes} min`;
-  if (feedbackLine) header += `\n<i>${escapeHtml(feedbackLine)}</i>`;
-  if (picked.length === 0) return [{ text: `${header}\n\n${escapeHtml(sel.note ?? "Nothing new today.")}` }];
+  // Blocks separated by blank lines so the header reads at a glance.
+  const blocks = [`📺 <b>Your YouTube digest</b>\n${date} · ${budgetMinutes} min`];
+  if (extras.intro) blocks.push(`<i>${escapeHtml(extras.intro)}</i>`);
+  const notes = [
+    extras.request && `🎯 Tonight: ${escapeHtml(extras.request)} (as you asked)`,
+    extras.taps && extras.taps.up + extras.taps.down && `🙏 Got your feedback: ${extras.taps.up} 👍, ${extras.taps.down} 👎. Thanks!`,
+  ].filter(Boolean);
+  if (notes.length) blocks.push(notes.join("\n"));
+  if (picked.length === 0) return [{ text: [...blocks, escapeHtml(sel.note ?? "Nothing new today.")].join("\n\n") }];
 
   const long = picked.filter((v) => v.kind === "long");
   const shorts = picked.filter((v) => v.kind === "short");
-  const sum = (vs: Video[]) => vs.reduce((a, v) => a + (v.durationSeconds ?? 0), 0);
-  const counts = `${long.length} videos (${fmtDuration(sum(long))}) + ${shorts.length} shorts (${fmtDuration(sum(shorts))})`;
-  header += `\n🎬 ${counts.replace(" + ", " · ⚡ ")}`;
+  blocks.push(counts(long, shorts));
+  const header = blocks.join("\n\n");
 
-  let footer = `⏱ <b>Total: ${fmtDuration(sel.totalSeconds)} of ${budgetMinutes} min</b> · ${counts}`;
+  let footer = `⏱ <b>Total: ${fmtDuration(sel.totalSeconds)} of ${budgetMinutes} min</b>\n${counts(long, shorts)}`;
   if (sel.note) footer += `\nℹ️ ${escapeHtml(sel.note)}`;
   footer += `\nTap 👍/👎 under a video to get more or less from that channel. Taps are picked up on the next run.`;
 

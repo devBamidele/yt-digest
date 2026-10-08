@@ -221,13 +221,7 @@ for (const v of sel.dropped.slice(0, 10)) console.log(`  ✗ ${v.creator} | ${v.
 // Step 7: deliver. Only a successful send marks videos as sent.
 const day = new Date().toLocaleDateString("en-GB", { timeZone: "Africa/Lagos", weekday: "short", day: "numeric", month: "short" });
 const taps = tapsSinceDigest(); // includes taps the 6am run collected
-const headerLines = [
-  agent?.intro,
-  tonight?.summary && `Tonight: ${tonight.summary} (as you asked)`,
-  taps.up + taps.down && `Got your feedback: ${taps.up} 👍, ${taps.down} 👎. Thanks!`,
-].filter(Boolean);
-const feedbackLine = headerLines.length ? headerLines.join("\n") : undefined;
-const messages = formatDigest(sel, picked, cfg.budgetMinutes, day, feedbackLine);
+const messages = formatDigest(sel, picked, cfg.budgetMinutes, day, { intro: agent?.intro, request: tonight?.summary || undefined, taps });
 let delivery: string;
 if (values["dry-run"]) {
   console.log(`\n--- Telegram preview (${messages.length} message${messages.length > 1 ? "s" : ""}, not sent) ---`);
