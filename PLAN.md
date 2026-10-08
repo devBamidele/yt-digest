@@ -102,15 +102,25 @@ Each step is run for real before the next one starts.
 
 Each run writes `logs/YYYY-MM-DD.json`: config used, everything fetched, every score, every pick or drop with its reason, summary cache hits/misses, and the delivery result.
 
-## 6. v2: agent (only after v1 works)
+## 6. v2: AI and agent (built 2026-10-08)
 
-- **Loop:** raw Claude API with tool use, no framework. Tools: `get_new_uploads`, `get_stats`, `get_top_comments`, `read_memory`, `write_memory`, `send_message`, and `propose_selection`. (`get_transcript` is left out, per the no-transcripts decision.)
-- **Inputs:** tonight's request (parsed from Telegram, e.g. "1h, no crypto"), `memory.json` (my taste notes + 👍/👎 history), the candidate list with v1 scores.
-- **Budget check stays in code:** `propose_selection` runs the same assertion as v1. If the selection is over budget, the tool returns an error and the agent must try again.
-- **Feedback:** each item gets 👍/👎 buttons. The next run reads the taps and asks for a one-line reason (optional), then stores `{videoId, vote, reason, date}` in `memory.json`.
-- **Skip day:** if nothing meets the quality bar, send a short "skip today" message.
-- **Safety:** at most N tool calls (default 15). Every tool call, argument, result size and decision is logged.
-- **Evals:** run the agent on the same fixtures and print agreement for **formula vs agent** side by side. Fail if any budget is exceeded.
+`mode` in creators.yaml picks how the digest is chosen: `formula` (v1), `ai`, or `agent` (default).
+
+| Part | What it does | Where |
+|---|---|---|
+| Taste profile | Claude writes Likes / Dislikes / Tentative from my 👍/👎 (titles looked up from YouTube). "My notes" is mine and never rewritten. Rebuilt when ≥3 new votes arrive. | `src/taste.ts`, `state/taste.md`, `npm run taste` |
+| AI ranking (`ai`) | Claude rates the formula's top 120 against the profile and tonight's request (0–10, with a reason). Score = 0.7 × fit + 0.3 × formula percentile; fit < 4 is dropped. Ratings cached until the profile/request changes. Falls back to the formula on failure. | `src/rank.ts`, `state/ratings.json` |
+| Tonight's request | Messages to the bot during the day ("30 min tonight, no money stuff") → budget, avoid/prefer topics, or skip. Parsed by Claude at the next run; `--budget` still wins. | `src/request.ts` |
+| Agent (`agent`) | Manual tool-use loop (no framework). Tools: get_new_uploads, get_stats, get_top_comments, read_memory, write_memory, propose_selection, skip_today. Capped at `agent_max_tool_calls` (20); every call logged in the run log. | `src/agent.ts`, `state/agent-notes.md` |
+
+Rules stay in code: `propose_selection` is validated (budget, per-creator cap, per-video length, shorts mix within 15%) and rejected with the reason so the agent can fix it; the budget is asserted again before sending. The agent never sends messages itself (deliberate change from the original send_message tool). If the agent fails (refusal, tool-call cap, error) the run falls back to AI ranking.
+
+**Eval (`npm run eval:ai -- --agent`)**: profile built from taps only, tested on the 25 hand labels. First results (small sample, noisy):
+- Ranking ("yes" above "no"): formula 63%, AI fit 65%, blend 61–68% depending on run.
+- Picks I'd watch: formula 69–89%, AI 67–80%, agent 75–83% (but the agent picks few on a 25-video pool).
+- Budget never exceeded in any mode.
+
+Next: turn accumulated 👍/👎 into eval labels so the comparison stops resting on 25 videos.
 
 ## 7. Secrets (env vars)
 

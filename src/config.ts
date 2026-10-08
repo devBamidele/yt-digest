@@ -15,6 +15,12 @@ export function parseConfig(text: string, budgetOverride?: number): Config {
     maxVideoMinutes: raw.max_video_minutes ?? 60,
     maxVideoShare: raw.max_video_share ?? 0.5,
     summaryModel: raw.summary_model ?? "claude-sonnet-5-5",
+    mode: raw.mode ?? "agent",
+    aiModel: raw.ai_model ?? "claude-opus-5-5",
+    aiShortlist: raw.ai_shortlist ?? 120,
+    aiWeight: raw.ai_weight ?? 0.7,
+    minFit: raw.min_fit ?? 4,
+    agentMaxToolCalls: raw.agent_max_tool_calls ?? 20,
     creators: [],
   };
 
@@ -35,6 +41,12 @@ export function parseConfig(text: string, budgetOverride?: number): Config {
   }
   if (!(typeof cfg.maxVideoShare === "number" && cfg.maxVideoShare > 0 && cfg.maxVideoShare <= 1)) {
     throw new Error(`max_video_share must be between 0 and 1, got ${cfg.maxVideoShare}`);
+  }
+  if (!["formula", "ai", "agent"].includes(cfg.mode)) {
+    throw new Error(`mode must be formula, ai or agent, got ${cfg.mode}`);
+  }
+  if (!(typeof cfg.aiWeight === "number" && cfg.aiWeight >= 0 && cfg.aiWeight <= 1)) {
+    throw new Error(`ai_weight must be between 0 and 1, got ${cfg.aiWeight}`);
   }
   if (!Array.isArray(raw.creators) || raw.creators.length === 0) {
     throw new Error("creators.yaml needs at least one creator");

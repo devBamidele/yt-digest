@@ -112,3 +112,51 @@ export async function addStats(videos: Video[], log = console.log): Promise<Vide
   }
   return out;
 }
+
+export interface VideoInfo {
+  videoId: string;
+  title: string;
+  description: string;
+  channelId: string;
+  creator: string;
+  durationSeconds: number;
+}
+
+/** Title, description, channel and length for any videos by ID (1 quota unit per 50). */
+export async function videoInfo(ids: string[]): Promise<Map<string, VideoInfo>> {
+  const out = new Map<string, VideoInfo>();
+  for (const batch of chunks(ids)) {
+    const data = await api("videos", { part: "snippet,contentDetails", id: batch.join(",") });
+    for (const item of data.items ?? []) {
+      out.set(item.id, {
+        videoId: item.id,
+        title: item.snippet.title,
+        description: item.snippet.description ?? "",
+        channelId: item.snippet.channelId,
+        creator: item.snippet.channelTitle,
+        durationSeconds: isoDurationToSeconds(item.contentDetails.duration),
+      });
+    }
+  }
+  return out;
+}
+
+/** Top comments by relevance (1 quota unit). Returns [] when comments are off. */
+export async function topComments(videoId: string, max = 8): Promise<{ text: string; likes: number }[]> {
+  try {
+    const data = await api("commentThreads", {
+      part: "snippet",
+      videoId,
+      order: "relevance",
+      maxResults: String(max),
+      textFormat: "plainText",
+    });
+    return (data.items ?? []).map((i: any) => ({
+      text: String(i.snippet.topLevelComment.snippet.textDisplay).replace(/\s+/g, " ").slice(0, 200),
+      likes: Number(i.snippet.topLevelComment.snippet.likeCount ?? 0),
+    }));
+  } catch (e) {
+    if (/HTTP 403/.test((e as Error).message)) return []; // comments disabled
+    throw e;
+  }
+}

@@ -14,7 +14,9 @@
     "fixtures:collect": "tsx evals/collect-fixtures.ts",
     "eval:select": "tsx evals/eval-select.ts",
     "eval:summaries": "tsx evals/eval-summaries.ts",
-    "feedback": "tsx src/feedback.ts"
+    "feedback": "tsx src/feedback.ts",
+    "taste": "tsx src/taste.ts",
+    "eval:ai": "tsx evals/eval-ai.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.132.1",

@@ -13,6 +13,12 @@ export interface Config {
   maxVideoMinutes: number;
   maxVideoShare: number;
   summaryModel: string;
+  mode: "formula" | "ai" | "agent"; // how picks are chosen (see creators.yaml)
+  aiModel: string;
+  aiShortlist: number;
+  aiWeight: number;
+  minFit: number;
+  agentMaxToolCalls: number;
   creators: Creator[];
 }
 
@@ -36,4 +42,6 @@ export interface Video {
   selected?: boolean;
   reason?: string;
   summary?: string;
+  fit?: number; // AI taste fit, 0-10
+  fitReason?: string;
 }

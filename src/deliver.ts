@@ -31,6 +31,7 @@ function item(v: Video, n: number): string {
     `${v.kind === "short" ? "⚡" : "🎬"} <b>${n}. <a href="${url}">${escapeHtml(v.title)}</a></b>`,
     `${escapeHtml(v.creator)} · ${fmtDuration(v.durationSeconds ?? 0)}`,
     escapeHtml(v.summary ?? ""),
+    v.fitReason ? `<i>Why: ${escapeHtml(v.fitReason)}</i>` : "",
   ]
     .filter(Boolean)
     .join("\n");

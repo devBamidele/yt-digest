@@ -4,13 +4,27 @@ import { loadConfig } from "./config.ts";
 import { addStats, fetchUploads } from "./fetch.ts";
 import { classify } from "./classify.ts";
 import { score } from "./score.ts";
-import { fmtDuration, select } from "./select.ts";
+import { assertBudget, fmtDuration, select, type Selection } from "./select.ts";
+import { runAgent, type AgentResult } from "./agent.ts";
 import { writeRunLog } from "./log.ts";
 import { loadSent, markSent, saveSent, unsent } from "./sent.ts";
 import { summarize } from "./summarize.ts";
 import { deliver, formatDigest } from "./deliver.ts";
-import { channelWeights, collectFeedback, loadFeedback, resetTapsSinceDigest, tapsSinceDigest } from "./feedback.ts";
+import {
+  channelWeights,
+  clearRequests,
+  collectFeedback,
+  loadFeedback,
+  pendingRequests,
+  resetTapsSinceDigest,
+  tapsSinceDigest,
+} from "./feedback.ts";
+import { parseRequests, requestForPrompt, type TonightRequest } from "./request.ts";
+import { sendTelegram } from "./deliver.ts";
 import { lagosDate } from "./log.ts";
+import { blend, rate, shortlist } from "./rank.ts";
+import { maybeUpdateTaste, tasteForPrompt } from "./taste.ts";
+import type { Video } from "./types.ts";
 
 // Local runs read secrets from .env; in CI they come from the environment.
 try {
@@ -47,10 +61,6 @@ if (values.help) {
 const budget = values.budget === undefined ? undefined : Number(values.budget);
 const cfg = loadConfig(values.config, budget);
 
-console.log(
-  `${cfg.creators.length} creators | budget: ${cfg.budgetMinutes} min | ` +
-    `mix: ${Math.round(cfg.shortsRatio * 100)}% shorts / ${Math.round((1 - cfg.shortsRatio) * 100)}% long-form`,
-);
 
 // Collect 👍/👎 taps since the last run and turn them into per-channel weights.
 // Only GitHub runs collect: Telegram hands each tap out once, so a local run would take it from the repo's state.
@@ -63,6 +73,44 @@ if (process.env.GITHUB_ACTIONS || values["collect-feedback"]) {
   }
 }
 const learned = channelWeights(loadFeedback());
+
+// Tonight's request: messages sent to the bot since the last digest, parsed by Claude.
+let tonight: TonightRequest | null = null;
+const requests = pendingRequests();
+if (requests.length) {
+  try {
+    tonight = await parseRequests(requests, cfg.aiModel);
+    console.log(`Request for tonight (${requests.length} message(s)): ${tonight.summary || "(nothing actionable)"}`);
+    if (tonight.budget_minutes && budget === undefined) cfg.budgetMinutes = tonight.budget_minutes; // --budget still wins
+  } catch (e) {
+    console.log(`  ! couldn't read tonight's request (${(e as Error).message}); using defaults`);
+  }
+}
+if (tonight?.skip_today) {
+  const msg = "📺 Skipping tonight's digest, as you asked. See you tomorrow!";
+  if (values["dry-run"]) console.log(`\n--- Telegram preview ---\n${msg}`);
+  else {
+    await sendTelegram(msg);
+    clearRequests();
+  }
+  writeRunLog({ ranAt: new Date().toISOString(), date: lagosDate(), skipped: "requested", requests, tonight });
+  console.log("Skipped tonight, as requested.");
+  process.exit(0);
+}
+
+console.log(
+  `${cfg.creators.length} creators | mode: ${cfg.mode} | budget: ${cfg.budgetMinutes} min | ` +
+    `mix: ${Math.round(cfg.shortsRatio * 100)}% shorts / ${Math.round((1 - cfg.shortsRatio) * 100)}% long-form`,
+);
+
+// Refresh the taste profile when enough new taps have arrived (AI modes only).
+if (cfg.mode !== "formula") {
+  try {
+    await maybeUpdateTaste(cfg.aiModel);
+  } catch (e) {
+    console.log(`  ! couldn't update the taste profile (${(e as Error).message}); using the saved one`);
+  }
+}
 
 const hours = values.hours === undefined ? cfg.backlogDays * 24 : Number(values.hours);
 const since = new Date(Date.now() - hours * 3600_000);
@@ -78,7 +126,69 @@ videos = await addStats(videos);
 // Your manual priority_weight × what your 👍/👎 taught it about this channel.
 videos = videos.map((v) => ({ ...v, priorityWeight: v.priorityWeight * (learned.get(v.channelId)?.weight ?? 1) }));
 videos = score(classify(videos, cfg.shortsMaxSeconds));
-const sel = select(videos, cfg.budgetMinutes, cfg.shortsRatio, cfg);
+
+// Agent mode: Claude investigates the shortlist with tools and proposes the set; code validates it.
+// If the agent fails for any reason, the run falls back to AI ranking below.
+let agent: AgentResult | undefined;
+let sel: Selection | undefined;
+if (cfg.mode === "agent" && videos.length) {
+  console.log(`\nAgent (max ${cfg.agentMaxToolCalls} tool calls):`);
+  agent = await runAgent({
+    candidates: shortlist(videos, cfg.aiShortlist, cfg.shortsRatio),
+    cfg,
+    taste: tasteForPrompt(),
+    request: requestForPrompt(tonight),
+    dryRun: values["dry-run"],
+  });
+  const u = agent.usage;
+  console.log(`  Agent ${agent.outcome} after ${agent.toolLog.length} tool calls (${u.input} in / ${u.output} out / ${u.cacheRead} cached tokens)${agent.error ? `: ${agent.error}` : ""}`);
+  if (agent.outcome === "skipped") {
+    const msg = `📺 No digest tonight. ${agent.skipped}`;
+    if (values["dry-run"]) console.log(`\n--- Telegram preview ---\n${msg}`);
+    else {
+      await sendTelegram(msg);
+      clearRequests();
+    }
+    writeRunLog({ ranAt: new Date().toISOString(), date: lagosDate(), config: cfg, skipped: "agent", reason: agent.skipped, agent, tonight });
+    process.exit(0);
+  }
+  if (agent.outcome === "selected") {
+    const budgetSeconds = Math.floor(cfg.budgetMinutes * 60);
+    assertBudget(agent.picked, budgetSeconds); // validated in the tool already; checked again before anything is sent
+    const totalSeconds = agent.picked.reduce((a, v) => a + (v.durationSeconds ?? 0), 0);
+    const chosen = new Set(agent.picked.map((v) => v.videoId));
+    const left = budgetSeconds - totalSeconds;
+    sel = {
+      picked: agent.picked,
+      dropped: videos.filter((v) => !chosen.has(v.videoId)).map((v) => ({ ...v, selected: false, reason: "not chosen by agent" })),
+      totalSeconds,
+      budgetSeconds,
+      shortsBudgetSeconds: Math.round(budgetSeconds * cfg.shortsRatio),
+      note: left >= 5 * 60 ? `${fmtDuration(left)} left unused: quality over filling time.` : undefined,
+    };
+  }
+}
+
+// AI taste ranking: Claude rates the formula's shortlist against the taste profile, then the
+// budgeted selector picks from the blend. Any failure falls back to the formula.
+let pool: Video[] = videos;
+let tasteRejected: Video[] = [];
+if (!sel && cfg.mode !== "formula" && videos.length) {
+  try {
+    const short = shortlist(videos, cfg.aiShortlist, cfg.shortsRatio);
+    const ratings = await rate(short, tasteForPrompt(), requestForPrompt(tonight), cfg.aiModel);
+    ({ eligible: pool, rejected: tasteRejected } = blend(short, ratings, cfg));
+    console.log(`  Shortlisted ${short.length}; ${tasteRejected.length} rated below min_fit ${cfg.minFit} and dropped`);
+  } catch (e) {
+    console.log(`  ! AI ranking failed (${(e as Error).message}); using the formula`);
+    pool = videos;
+  }
+}
+if (!sel) {
+  sel = select(pool, cfg.budgetMinutes, cfg.shortsRatio, cfg);
+  if (cfg.mode !== "formula" && pool.length === 0 && videos.length) sel.note = "Skip today: nothing new fits your taste.";
+  sel.dropped.push(...tasteRejected);
+}
 
 const shortsUsed = sel.picked.filter((v) => v.kind === "short").reduce((a, v) => a + v.durationSeconds!, 0);
 console.log(
@@ -94,7 +204,7 @@ if (!values["no-summaries"]) {
   console.log(`  Summaries: ${s.cached} cached, ${s.generated} new, ${s.failed} failed (${s.inputTokens} in / ${s.outputTokens} out tokens)`);
 }
 for (const v of picked) {
-  console.log(`  ✓ ${v.creator} | ${v.title}\n      ${v.reason}`);
+  console.log(`  ✓ ${v.creator} | ${v.title}\n      ${v.reason}${v.fit === undefined ? "" : ` | fit ${v.fit}/10: ${v.fitReason}`}`);
   if (v.summary) console.log(`      → ${v.summary}`);
 }
 if (sel.dropped.length) console.log(`\nDropped ${sel.dropped.length} (first 10; all are in the log):`);
@@ -103,7 +213,12 @@ for (const v of sel.dropped.slice(0, 10)) console.log(`  ✗ ${v.creator} | ${v.
 // Step 7: deliver. Only a successful send marks videos as sent.
 const day = new Date().toLocaleDateString("en-GB", { timeZone: "Africa/Lagos", weekday: "short", day: "numeric", month: "short" });
 const taps = tapsSinceDigest(); // includes taps the 6am run collected
-const feedbackLine = taps.up + taps.down ? `Got your feedback: ${taps.up} 👍, ${taps.down} 👎. Thanks!` : undefined;
+const headerLines = [
+  agent?.intro,
+  tonight?.summary && `Tonight: ${tonight.summary} (as you asked)`,
+  taps.up + taps.down && `Got your feedback: ${taps.up} 👍, ${taps.down} 👎. Thanks!`,
+].filter(Boolean);
+const feedbackLine = headerLines.length ? headerLines.join("\n") : undefined;
 const messages = formatDigest(sel, picked, cfg.budgetMinutes, day, feedbackLine);
 let delivery: string;
 if (values["dry-run"]) {
@@ -119,6 +234,7 @@ if (values["dry-run"]) {
     saveSent(markSent(delivered, sent));
   }
   resetTapsSinceDigest(); // acknowledged in this digest's header
+  clearRequests(); // tonight's request has been used
   delivery = `sent ${messages.length} message(s)`;
   console.log(`\n✓ Sent to Telegram (${messages.length} messages); ${delivered.length} videos marked as sent`);
 }
@@ -135,6 +251,9 @@ const logPath = writeRunLog({
   totalSeconds: sel.totalSeconds,
   note: sel.note,
   feedbackCollected: feedback,
+  requests,
+  tonight,
+  agent, // every tool call with its input, result and timing
   learnedWeights: Object.fromEntries(learned),
   summaryModel: values["no-summaries"] ? null : cfg.summaryModel,
   summaryStats,

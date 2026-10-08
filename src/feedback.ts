@@ -20,6 +20,7 @@ export interface FeedbackState {
   offset: number; // next Telegram update_id to fetch
   votes: Record<string, Vote>; // by videoId; the latest tap wins, so you can change your mind
   sinceDigest?: { up: number; down: number }; // taps collected since the last digest, for its header
+  requests?: { text: string; at: string }[]; // messages I sent the bot since the last digest
 }
 
 export function loadFeedback(path = FEEDBACK_PATH): FeedbackState {
@@ -41,12 +42,17 @@ export function parseCallback(data: string): { vote: "up" | "down"; videoId: str
   return m ? { vote: m[1] === "u" ? "up" : "down", videoId: m[2], channelId: m[3] } : null;
 }
 
-/** Applies Telegram updates to the state. Only button taps from my own chat count. */
+/** Applies Telegram updates to the state. Only taps and messages from my own chat count. */
 export function applyUpdates(state: FeedbackState, updates: any[], chatId: string) {
   let up = 0;
   let down = 0;
   for (const u of updates) {
     state.offset = Math.max(state.offset, u.update_id + 1);
+    const m = u.message;
+    if (m && String(m.chat?.id) === chatId && typeof m.text === "string" && !m.text.startsWith("/")) {
+      (state.requests ??= []).push({ text: m.text.slice(0, 1000), at: new Date(m.date * 1000).toISOString() });
+      continue;
+    }
     const q = u.callback_query;
     if (!q || String(q.message?.chat?.id) !== chatId) continue;
     const c = parseCallback(q.data ?? "");
@@ -64,7 +70,7 @@ export async function collectFeedback(log = console.log) {
   if (!token || !chatId) throw new Error("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set");
 
   const state = loadFeedback();
-  const qs = new URLSearchParams({ offset: String(state.offset), allowed_updates: JSON.stringify(["callback_query"]) });
+  const qs = new URLSearchParams({ offset: String(state.offset), allowed_updates: JSON.stringify(["callback_query", "message"]) });
   const res = await fetch(`https://api.telegram.org/bot${token}/getUpdates?${qs}`);
   const body = await res.json();
   if (!body.ok) throw new Error(`Telegram getUpdates failed: ${body.description ?? res.status}`);
@@ -73,7 +79,10 @@ export async function collectFeedback(log = console.log) {
   const since = state.sinceDigest ?? { up: 0, down: 0 };
   state.sinceDigest = { up: since.up + counts.up, down: since.down + counts.down };
   saveFeedback(state);
-  log(`Feedback: ${counts.up} 👍, ${counts.down} 👎 collected (${Object.keys(state.votes).length} votes in total)`);
+  log(
+    `Feedback: ${counts.up} 👍, ${counts.down} 👎 collected (${Object.keys(state.votes).length} votes in total); ` +
+      `${state.requests?.length ?? 0} request message(s) waiting`,
+  );
   return counts;
 }
 
@@ -85,6 +94,18 @@ export function tapsSinceDigest(path = FEEDBACK_PATH) {
 export function resetTapsSinceDigest(path = FEEDBACK_PATH): void {
   const state = loadFeedback(path);
   state.sinceDigest = { up: 0, down: 0 };
+  saveFeedback(state, path);
+}
+
+/** Messages I sent the bot since the last digest. */
+export function pendingRequests(path = FEEDBACK_PATH): { text: string; at: string }[] {
+  return loadFeedback(path).requests ?? [];
+}
+
+/** Called once a digest (or a skip message) has gone out: the requests have been used. */
+export function clearRequests(path = FEEDBACK_PATH): void {
+  const state = loadFeedback(path);
+  state.requests = [];
   saveFeedback(state, path);
 }
 

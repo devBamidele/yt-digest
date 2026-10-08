@@ -48,3 +48,12 @@ test("taps since the last digest add up across collections and reset after a dig
   resetTapsSinceDigest(path);
   assert.deepEqual(tapsSinceDigest(path), { up: 0, down: 0 });
 });
+
+test("messages from my chat are kept as requests; commands and other chats are ignored", () => {
+  const s: FeedbackState = { offset: 0, votes: {} };
+  const msg = (update_id: number, text: string, chat = 42) => ({ update_id, message: { chat: { id: chat }, date: 1_780_000_000, text } });
+  applyUpdates(s, [msg(1, "/start"), msg(2, "only 30 min tonight"), msg(3, "spam", 999), tap(4, `u|vid1abcdefg|${CH}`)], "42");
+  assert.deepEqual(s.requests?.map((r) => r.text), ["only 30 min tonight"]);
+  assert.equal(s.votes.vid1abcdefg.vote, "up");
+  assert.equal(s.offset, 5);
+});
