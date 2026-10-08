@@ -103,6 +103,12 @@ CREATE TABLE IF NOT EXISTS oauth_states (
   created_at TEXT NOT NULL
 );
 
+-- Small app-wide flags, e.g. when the owner was last alerted about a failure.
+CREATE TABLE IF NOT EXISTS app_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS sent_by_time ON sent (chat_id, at);
 CREATE INDEX IF NOT EXISTS votes_by_time ON votes (chat_id, at);
 CREATE INDEX IF NOT EXISTS requests_by_user ON requests (chat_id, id);

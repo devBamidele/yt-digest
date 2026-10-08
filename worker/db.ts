@@ -264,3 +264,17 @@ export async function deleteUser(db: D1, chatId: string) {
   const tables = ["creators", "votes", "sent", "requests", "taste", "agent_notes", "ratings", "usage", "oauth_states", "users"];
   await db.batch(tables.map((t) => db.prepare(`DELETE FROM ${t} WHERE chat_id = ?`).bind(chatId)));
 }
+
+// ---------- owner alerts ----------
+
+/** True (and records the time) if no alert with this key was sent in the last `minutes`. */
+export async function claimAlert(db: D1, key: string, minutes: number): Promise<boolean> {
+  const cutoff = iso(new Date(Date.now() - minutes * 60_000));
+  const r = await db
+    .prepare(
+      "INSERT INTO app_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value WHERE app_state.value < ?",
+    )
+    .bind(`alert:${key}`, iso(), cutoff)
+    .run();
+  return r.meta.changes === 1;
+}

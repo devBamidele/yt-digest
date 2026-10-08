@@ -247,7 +247,7 @@ async function importSubscriptions(env: Env, url: URL): Promise<void> {
   }
 }
 
-/** Hourly cron: if anyone's delivery hour has come, start the GitHub run for that exact moment. */
+/** Cron (every 5 minutes): if anyone's delivery time has come, start the GitHub run for that exact moment. */
 export async function hourly(env: Env, scheduledTime: number): Promise<string> {
   const at = new Date(scheduledTime);
   const due = await db.dueUsers(env.DB, at);
@@ -268,7 +268,21 @@ export async function hourly(env: Env, scheduledTime: number): Promise<string> {
 
 export default {
   async scheduled(event: { scheduledTime: number }, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }) {
-    ctx.waitUntil(hourly(env, event.scheduledTime).then((r) => console.log(`hourly: ${r}`), (e) => console.log(`hourly failed: ${e}`)));
+    ctx.waitUntil(
+      hourly(env, event.scheduledTime).then(
+        (r) => console.log(`hourly: ${r}`),
+        async (e) => {
+          console.log(`hourly failed: ${e}`);
+          // Don't fail silently: tell the owner, at most once an hour.
+          if (await db.claimAlert(env.DB, "dispatch", 55)) {
+            await telegram(env, "sendMessage", {
+              chat_id: env.TELEGRAM_CHAT_ID,
+              text: `⚠️ Couldn't start digest runs: ${String((e as Error).message ?? e).slice(0, 300)}`,
+            });
+          }
+        },
+      ),
+    );
   },
 
   async fetch(request: Request, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }): Promise<Response> {

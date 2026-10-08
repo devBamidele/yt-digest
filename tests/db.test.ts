@@ -108,3 +108,10 @@ test("/delete removes the user from every table", async () => {
     assert.equal(r!.n, 0, t);
   }
 });
+
+test("owner alerts: at most one per window", async () => {
+  assert.equal(await db.claimAlert(DB, "dispatch", 55), true);
+  assert.equal(await db.claimAlert(DB, "dispatch", 55), false);
+  assert.equal(await db.claimAlert(DB, "other", 55), true);
+  assert.equal(await db.claimAlert(DB, "dispatch", 0), true); // window passed
+});
