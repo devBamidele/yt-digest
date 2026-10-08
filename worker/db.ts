@@ -80,11 +80,13 @@ export async function redeemInvite(db: D1, code: string, chatId: string): Promis
 
 // ---------- channels ----------
 
-export async function replaceCreators(db: D1, chatId: string, subs: { id: string; name: string }[]) {
+/** Replaces the channel list; with `nextStep`, moves the user on in the same write (so they can't get stuck). */
+export async function replaceCreators(db: D1, chatId: string, subs: { id: string; name: string }[], nextStep?: string) {
   const unique = [...new Map(subs.map((s) => [s.id, s])).values()];
   await db.batch([
     db.prepare("DELETE FROM creators WHERE chat_id = ?").bind(chatId),
     ...unique.map((s) => db.prepare("INSERT INTO creators (chat_id, channel_id, name) VALUES (?, ?, ?)").bind(chatId, s.id, s.name)),
+    ...(nextStep ? [db.prepare("UPDATE users SET step = ? WHERE chat_id = ?").bind(nextStep, chatId)] : []),
   ]);
   return unique.length;
 }

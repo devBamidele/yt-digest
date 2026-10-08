@@ -65,7 +65,15 @@ async function listSubs(params: Record<string, string>, auth: { token?: string; 
   const subs: Sub[] = [];
   let pageToken = "";
   do {
-    const qs = new URLSearchParams({ part: "snippet", maxResults: "50", ...params, ...(pageToken && { pageToken }), ...(auth.apiKey && { key: auth.apiKey }) });
+    const qs = new URLSearchParams({
+      part: "snippet",
+      maxResults: "50",
+      // Only the two fields we use: keeps responses tiny (the Worker has a small CPU budget).
+      fields: "nextPageToken,items(snippet(title,resourceId(channelId)))",
+      ...params,
+      ...(pageToken && { pageToken }),
+      ...(auth.apiKey && { key: auth.apiKey }),
+    });
     const res = await fetch(`${API_URL}subscriptions?${qs}`, auth.token ? { headers: { Authorization: `Bearer ${auth.token}` } } : {});
     const body = (await res.json()) as any;
     if (!res.ok) throw new SubsError(subsErrorMessage(body?.error?.errors?.[0]?.reason ?? String(res.status)));

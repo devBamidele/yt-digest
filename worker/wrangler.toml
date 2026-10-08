@@ -22,3 +22,7 @@ crons = ["0 * * * *"]
 binding = "DB"
 database_name = "yt_digest"
 database_id = "efde78cb-07df-4cef-82a7-ffc967c6d464"
+
+# Keep request logs (errors, CPU limits, console output) viewable in the Cloudflare dashboard.
+[observability]
+enabled = true

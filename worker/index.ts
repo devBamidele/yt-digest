@@ -173,7 +173,10 @@ async function oauthStart(env: Env, url: URL): Promise<Response> {
 /** /oauth/callback: Google sends the person back here; read their subscriptions once and continue in Telegram. */
 async function oauthCallback(env: Env, url: URL): Promise<Response> {
   const saved = await db.takeOAuthState(env.DB, url.searchParams.get("state") ?? "");
-  if (!saved) return page("Link expired", "Tap Connect YouTube in the bot again.", 400);
+  if (!saved) {
+    // Usually the browser reloading a page that already worked.
+    return page("Already done", "This sign-in was already used. Go back to Telegram: if the bot hasn't moved on to the next step, tap Connect YouTube again.");
+  }
   const chat_id = saved.chat_id;
   if (url.searchParams.get("error")) {
     await telegram(env, "sendMessage", { chat_id, text: "Google sign-in was cancelled. Tap Connect YouTube to try again, or use one of the other options." });

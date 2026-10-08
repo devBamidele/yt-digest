@@ -153,16 +153,17 @@ async function imported(ctx: OnboardingCtx, chatId: string, subs: Sub[], how: st
     await ctx.tg("sendMessage", { chat_id: chatId, text: `I couldn't find any channels ${how}. Try another option.` });
     return;
   }
-  const n = await db.replaceCreators(ctx.db, chatId, subs);
-  const user = await db.getUser(ctx.db, chatId);
-  if (user && user.status !== "onboarding") {
+  const before = await db.getUser(ctx.db, chatId);
+  const syncing = before !== null && before.status !== "onboarding";
+  // Save the list and the next step together, so an interrupted request never leaves someone stuck.
+  const n = await db.replaceCreators(ctx.db, chatId, subs, syncing ? "done" : STEPS[1]);
+  if (syncing) {
     // /sync from someone already set up: just replace the list.
-    await db.updateUser(ctx.db, chatId, { step: "done" });
     await ctx.tg("sendMessage", { chat_id: chatId, text: `✅ Updated: ${n} channels ${how}. Your next digest uses the new list.` });
     return;
   }
   await ctx.tg("sendMessage", { chat_id: chatId, text: `✅ Found ${n} channels ${how}.` });
-  await advance(ctx, chatId, "connect");
+  await prompt(ctx, (await db.getUser(ctx.db, chatId))!);
 }
 
 /** A Takeout subscriptions.csv sent as a Telegram document (setup or /sync). */
