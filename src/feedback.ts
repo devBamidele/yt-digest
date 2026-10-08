@@ -19,6 +19,7 @@ export interface Vote {
 export interface FeedbackState {
   offset: number; // next Telegram update_id to fetch
   votes: Record<string, Vote>; // by videoId; the latest tap wins, so you can change your mind
+  sinceDigest?: { up: number; down: number }; // taps collected since the last digest, for its header
 }
 
 export function loadFeedback(path = FEEDBACK_PATH): FeedbackState {
@@ -69,9 +70,22 @@ export async function collectFeedback(log = console.log) {
   if (!body.ok) throw new Error(`Telegram getUpdates failed: ${body.description ?? res.status}`);
 
   const counts = applyUpdates(state, body.result, chatId);
+  const since = state.sinceDigest ?? { up: 0, down: 0 };
+  state.sinceDigest = { up: since.up + counts.up, down: since.down + counts.down };
   saveFeedback(state);
   log(`Feedback: ${counts.up} 👍, ${counts.down} 👎 collected (${Object.keys(state.votes).length} votes in total)`);
   return counts;
+}
+
+/** Taps collected since the last digest (including by the 6am run); `reset` once the digest is sent. */
+export function tapsSinceDigest(path = FEEDBACK_PATH) {
+  return loadFeedback(path).sinceDigest ?? { up: 0, down: 0 };
+}
+
+export function resetTapsSinceDigest(path = FEEDBACK_PATH): void {
+  const state = loadFeedback(path);
+  state.sinceDigest = { up: 0, down: 0 };
+  saveFeedback(state, path);
 }
 
 /** Per-channel weight multipliers learned from votes: STEP^(👍 − 👎), clamped. */

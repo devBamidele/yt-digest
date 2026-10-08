@@ -37,3 +37,14 @@ test("channel weight = 1.5^(👍−👎), clamped", () => {
   const loved = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`v${i}`, vote("up")]));
   assert.equal(channelWeights({ offset: 0, votes: loved }).get(CH)!.weight, MAX_WEIGHT);
 });
+
+test("taps since the last digest add up across collections and reset after a digest", async () => {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { resetTapsSinceDigest, saveFeedback, tapsSinceDigest } = await import("../src/feedback.ts");
+  const path = `${mkdtempSync(`${tmpdir()}/fb-`)}/feedback.json`;
+  saveFeedback({ offset: 0, votes: {}, sinceDigest: { up: 2, down: 1 } }, path);
+  assert.deepEqual(tapsSinceDigest(path), { up: 2, down: 1 });
+  resetTapsSinceDigest(path);
+  assert.deepEqual(tapsSinceDigest(path), { up: 0, down: 0 });
+});

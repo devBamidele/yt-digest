@@ -9,7 +9,7 @@ import { writeRunLog } from "./log.ts";
 import { loadSent, markSent, saveSent, unsent } from "./sent.ts";
 import { summarize } from "./summarize.ts";
 import { deliver, formatDigest } from "./deliver.ts";
-import { channelWeights, collectFeedback, loadFeedback } from "./feedback.ts";
+import { channelWeights, collectFeedback, loadFeedback, resetTapsSinceDigest, tapsSinceDigest } from "./feedback.ts";
 import { lagosDate } from "./log.ts";
 
 // Local runs read secrets from .env; in CI they come from the environment.
@@ -54,7 +54,7 @@ console.log(
 
 // Collect 👍/👎 taps since the last run and turn them into per-channel weights.
 // Only GitHub runs collect: Telegram hands each tap out once, so a local run would take it from the repo's state.
-let feedback = { up: 0, down: 0 };
+let feedback = { up: 0, down: 0 }; // collected by this run, for the log
 if (process.env.GITHUB_ACTIONS || values["collect-feedback"]) {
   try {
     feedback = await collectFeedback();
@@ -102,7 +102,8 @@ for (const v of sel.dropped.slice(0, 10)) console.log(`  ✗ ${v.creator} | ${v.
 
 // Step 7: deliver. Only a successful send marks videos as sent.
 const day = new Date().toLocaleDateString("en-GB", { timeZone: "Africa/Lagos", weekday: "short", day: "numeric", month: "short" });
-const feedbackLine = feedback.up + feedback.down ? `Got your feedback: ${feedback.up} 👍, ${feedback.down} 👎. Thanks!` : undefined;
+const taps = tapsSinceDigest(); // includes taps the 6am run collected
+const feedbackLine = taps.up + taps.down ? `Got your feedback: ${taps.up} 👍, ${taps.down} 👎. Thanks!` : undefined;
 const messages = formatDigest(sel, picked, cfg.budgetMinutes, day, feedbackLine);
 let delivery: string;
 if (values["dry-run"]) {
@@ -117,6 +118,7 @@ if (values["dry-run"]) {
   } finally {
     saveSent(markSent(delivered, sent));
   }
+  resetTapsSinceDigest(); // acknowledged in this digest's header
   delivery = `sent ${messages.length} message(s)`;
   console.log(`\n✓ Sent to Telegram (${messages.length} messages); ${delivered.length} videos marked as sent`);
 }
