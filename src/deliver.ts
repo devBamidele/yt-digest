@@ -25,15 +25,20 @@ export function keyboard(v: Video) {
   };
 }
 
+/** Drops trailing hashtags ("… #ai #meme #shorts"); keeps the title as is if that would empty it. */
+export function cleanTitle(title: string): string {
+  const cleaned = title.replace(/(\s*#[\p{L}\p{N}_]+)+\s*$/u, "").trim();
+  return cleaned || title;
+}
+
 function item(v: Video, n: number): string {
   const url = `https://youtu.be/${v.videoId}`;
-  return [
-    `${v.kind === "short" ? "⚡" : "🎬"} <b>${n}. <a href="${url}">${escapeHtml(v.title)}</a></b>`,
+  const head = [
+    `${v.kind === "short" ? "⚡" : "🎬"} <b>${n}. <a href="${url}">${escapeHtml(cleanTitle(v.title))}</a></b>`,
     `${escapeHtml(v.creator)} · ${fmtDuration(v.durationSeconds ?? 0)}`,
-    escapeHtml(v.summary ?? ""),
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ].join("\n");
+  // Title and channel on top, then a blank line, then the summary.
+  return v.summary ? `${head}\n\n${escapeHtml(v.summary)}` : head;
 }
 
 export interface HeaderExtras {

@@ -21,7 +21,7 @@ test("header, one message per video (long-form first) with its own buttons, then
   assert.equal(msgs[0].text, "📺 <b>Your YouTube digest</b>\nThu 8 Oct · 60 min\n\n🎬 1 video · 10:00   ⚡ 1 short · 0:45");
   assert.equal(msgs[0].video, undefined);
   assert.equal(msgs[1].video?.videoId, "id1");
-  assert.match(msgs[1].text, /^🎬 <b>1\. <a href="https:\/\/youtu.be\/id1">Title 1<\/a><\/b>\nCreator 1 · 10:00\nSummary 1\.$/);
+  assert.equal(msgs[1].text, `🎬 <b>1. <a href="https://youtu.be/id1">Title 1</a></b>\nCreator 1 · 10:00\n\nSummary 1.`);
   assert.match(msgs[2].text, /^⚡ <b>2\./);
   assert.match(msgs[3].text, /^⏱ <b>Total: 10:45 of 60 min<\/b>/);
   assert.equal(msgs[3].video, undefined);
@@ -98,4 +98,12 @@ test("delivery marks each video as soon as its message is sent, and stops at a f
   assert.equal(sent[0].disable_notification, false); // header notifies
   assert.equal(sent[1].disable_notification, true); // the rest are silent
   assert.ok(sent[1].reply_markup.inline_keyboard);
+});
+
+test("titles lose trailing hashtags, but hashtags mid-title and all-hashtag titles stay", async () => {
+  const { cleanTitle } = await import("../src/deliver.ts");
+  assert.equal(cleanTitle("Reverse Engineering Games #ai #meme #comedy #gaming #mod"), "Reverse Engineering Games");
+  assert.equal(cleanTitle("Try Not To Laugh Pt. 840😹🤣😂#ifyoulaughyoulose#dontlaughchallenge"), "Try Not To Laugh Pt. 840😹🤣😂");
+  assert.equal(cleanTitle("The #1 Street Food in NYC"), "The #1 Street Food in NYC");
+  assert.equal(cleanTitle("#shorts #funny"), "#shorts #funny");
 });
