@@ -57,6 +57,17 @@ export async function fetchUploads(cfg: Config, since: Date, log = console.log):
   return results.flat();
 }
 
+/** Duration of a videos.list item, or 0 when YouTube gives none (live now, upcoming premiere) or an odd value. */
+export function itemDuration(item: any): number {
+  const d = item?.contentDetails?.duration;
+  if (typeof d !== "string") return 0;
+  try {
+    return isoDurationToSeconds(d);
+  } catch {
+    return 0;
+  }
+}
+
 export function isoDurationToSeconds(d: string): number {
   // e.g. PT1H2M3S, PT45S, P1DT2H, P0D
   const m = d.match(/^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/);
@@ -97,7 +108,7 @@ export async function addStats(videos: Video[], log = console.log): Promise<Vide
   const out: Video[] = [];
   for (const v of videos) {
     const s = stats.get(v.videoId);
-    const duration = s ? isoDurationToSeconds(s.contentDetails.duration) : 0;
+    const duration = itemDuration(s); // 0 → skipped below
     if (!s || duration === 0) {
       // Private, deleted, or an upcoming/live stream with no duration yet.
       log(`  - skipped ${v.videoId} (${v.title}): no stats or no duration yet`);
@@ -134,7 +145,7 @@ export async function videoInfo(ids: string[]): Promise<Map<string, VideoInfo>> 
         description: item.snippet.description ?? "",
         channelId: item.snippet.channelId,
         creator: item.snippet.channelTitle,
-        durationSeconds: isoDurationToSeconds(item.contentDetails.duration),
+        durationSeconds: itemDuration(item),
       });
     }
   }

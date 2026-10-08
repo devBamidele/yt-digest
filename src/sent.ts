@@ -28,3 +28,9 @@ export function saveSent(sent: SentLog, path = SENT_PATH): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(sent, null, 2));
 }
+
+/** True if any digest went out today (Lagos date), e.g. from a manual run. */
+export function sentToday(sent: SentLog, now = new Date()): boolean {
+  const day = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "Africa/Lagos" });
+  return Object.values(sent).some((at) => day(new Date(at)) === day(now));
+}

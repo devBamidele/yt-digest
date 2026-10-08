@@ -34,3 +34,12 @@ test("feed with a single entry or none", () => {
   assert.equal(parseFeed(feed(entry("one", "2026-10-08T10:00:00+00:00")), creator, since).length, 1);
   assert.equal(parseFeed(feed(""), creator, since).length, 0);
 });
+
+test("a video with no duration (live now, upcoming premiere) reads as 0 instead of crashing", async () => {
+  const { itemDuration } = await import("../src/fetch.ts");
+  assert.equal(itemDuration({ contentDetails: {} }), 0);
+  assert.equal(itemDuration({}), 0);
+  assert.equal(itemDuration(undefined), 0);
+  assert.equal(itemDuration({ contentDetails: { duration: "weird" } }), 0);
+  assert.equal(itemDuration({ contentDetails: { duration: "PT1M5S" } }), 65);
+});

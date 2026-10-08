@@ -7,7 +7,7 @@ import { score } from "./score.ts";
 import { assertBudget, fmtDuration, select, type Selection } from "./select.ts";
 import { runAgent, type AgentResult } from "./agent.ts";
 import { writeRunLog } from "./log.ts";
-import { loadSent, markSent, saveSent, unsent } from "./sent.ts";
+import { loadSent, markSent, saveSent, sentToday, unsent } from "./sent.ts";
 import { summarize } from "./summarize.ts";
 import { deliver, formatDigest } from "./deliver.ts";
 import {
@@ -55,6 +55,12 @@ const { values } = parseArgs({
 
 if (values.help) {
   console.log(HELP);
+  process.exit(0);
+}
+
+// A late scheduled run shouldn't send a second digest after a manual one went out today.
+if (process.env.GITHUB_EVENT_NAME === "schedule" && sentToday(loadSent())) {
+  console.log("A digest was already sent today (manual run); skipping the scheduled one.");
   process.exit(0);
 }
 
