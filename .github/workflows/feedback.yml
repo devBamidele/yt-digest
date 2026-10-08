@@ -1,7 +1,7 @@
 name: Collect feedback
 
-# Telegram keeps button taps for only 24 hours. Collecting them at 06:00 Lagos as well as
-# at the 18:00 digest means no tap waits more than about 12 hours.
+# Pulls taps and messages from the always-on receiver into state/ once in the morning, so the
+# repo stays current. (The receiver keeps them for 30 days, so nothing is lost if this is skipped.)
 on:
   schedule:
     - cron: "0 5 * * *" # 05:00 UTC = 06:00 in Lagos
@@ -29,6 +29,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          EVENTS_URL: ${{ secrets.EVENTS_URL }} # always-on receiver that stores taps and messages
+          EVENTS_TOKEN: ${{ secrets.EVENTS_TOKEN }}
         run: npm run feedback
       - name: Save state
         run: |
