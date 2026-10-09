@@ -2,14 +2,14 @@
 // Telegram POSTs every message and button tap here (a webhook) the moment it happens, and the
 // worker replies right away. It runs onboarding for invited users (Google sign-in at /oauth/*),
 // commands and settings, saves votes and requests to D1, serves per-user data to the daily run
-// (/api/*), and every hour starts the GitHub run for whoever is due.
+// (/api/*), and every 5 minutes starts the GitHub run for whoever is due.
 import { parseRequests } from "../src/request.ts";
 import { handleApi } from "./api.ts";
 import * as db from "./db.ts";
 import { authUrl, exchangeCode, mySubscriptions, randomToken, SubsError, verifyConnect } from "./google.ts";
 import { handleCommand, handleSettingInput, handleSettingsCallback } from "./commands.ts";
 import { handleOnboarding, importCsvDocument, importedFromGoogle, prompt, type OnboardingCtx } from "./onboarding.ts";
-import { cooldownEnds, countdown, fmtTime, friendlyTime, localClock, nextDigest, nextDigestTime, nextOccurrence } from "./time.ts";
+import { cooldownEnds, countdown, fmtTime, localClock, nextDigest, nextDigestTime, nextOccurrence } from "./time.ts";
 import { refreshAll, refreshStatus } from "./status.ts";
 
 interface Env {
@@ -39,36 +39,7 @@ async function telegram(env: Env, method: string, payload: Record<string, unknow
   return body;
 }
 
-/** "tonight around 6pm" before the digest, "tomorrow around 6pm" after it, vaguer in between. */
-export function whenNext(now = new Date(), timezone = "Africa/Lagos", hour = 18, minute = 0): string {
-  const [h, m] = now.toLocaleTimeString("en-GB", { timeZone: timezone, hour12: false }).split(":").map(Number);
-  const minutes = h * 60 + m;
-  const target = hour * 60 + minute;
-  const at = friendlyTime(hour, minute);
-  const today = hour >= 17 ? "tonight" : "today";
-  if (minutes < target - 30) return `${today} around ${at}`;
-  if (minutes >= target + 45) return `tomorrow around ${at}`;
-  return "in your next digest";
-}
-
 const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-async function replyToMessage(env: Env, chat_id: string, text: string, at: string, when = whenNext()) {
-  let reply: string;
-  try {
-    process.env.ANTHROPIC_API_KEY = env.ANTHROPIC_API_KEY;
-    const r = await parseRequests([{ text, at }], env.AI_MODEL);
-    if (r.skip_today) reply = `👌 Okay, no digest ${when.startsWith("tomorrow") ? "tomorrow" : "today"}.`;
-    else if (r.summary) reply = `Got it: <b>${escape(r.summary)}</b>.\nYou'll get it ${when}.`;
-    else
-      reply =
-        "👋 Noted. To change your next digest, tell me the time, the mix or topics, e.g. <i>“45 min, only shorts, something funny”</i>.";
-  } catch (e) {
-    console.log(`parse failed: ${(e as Error).message}`);
-    reply = `✅ Got it. I'll use this ${when}.`;
-  }
-  await telegram(env, "sendMessage", { chat_id, text: reply, parse_mode: "HTML" });
-}
 
 function onboardingCtx(env: Env, origin: string): OnboardingCtx {
   return {
