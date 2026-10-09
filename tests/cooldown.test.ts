@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cooldownNotice, countdown, isDue, nextDigest, nextDigestTime, statusLine } from "../worker/time.ts";
+import { cooldownEnds, countdown, isDue, nextDigest, nextDigestTime, statusLine } from "../worker/time.ts";
 
 const lagos = (day: number, hhmm: string) => new Date(`2026-10-${String(day).padStart(2, "0")}T${hhmm}:00+01:00`);
 const base = { timezone: "Africa/Lagos", delivery_hour: 10, delivery_minute: 0, last_digest_at: null as string | null, next_digest_at: null as string | null };
@@ -14,7 +14,7 @@ test("one digest a day: after a 10am digest, nothing else for 23 hours", () => {
   // …and neither does a one-off "send it now".
   const now = { ...u, next_digest_at: lagos(9, "14:00").toISOString() };
   assert.equal(isDue(now, lagos(9, "14:05")), false);
-  assert.match(cooldownNotice(u, lagos(9, "14:00"))!, /next one can come tomorrow at 9:03am \(in 19h 3m\)/);
+  assert.equal(cooldownEnds(u)!.toISOString(), lagos(10, "09:03").toISOString()); // 23h after 10:03
 });
 
 test("the daily digest doesn't drift: tomorrow's 10am check still delivers", () => {
@@ -31,7 +31,7 @@ test("moving the time earlier waits out the cooldown", () => {
 
 test("first digest ever: no cooldown", () => {
   assert.equal(isDue(base, lagos(9, "10:00")), true);
-  assert.equal(cooldownNotice(base, lagos(9, "10:00")), null);
+  assert.equal(cooldownEnds(base), null);
 });
 
 test("countdown and pinned status line", () => {

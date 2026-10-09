@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { validateSelection } from "../src/agent.ts";
-import { parseConfig } from "../src/config.ts";
+import { parseAppConfig } from "../src/config.ts";
 import type { Video } from "../src/types.ts";
 
-const cfg = parseConfig(`creators:\n  - id: UCsBjURrPoezykLs9EqgamOA`, 60); // 60 min, max 2 per creator, ≤30 min per video
+const cfg = { ...parseAppConfig(""), budgetMinutes: 60, shortsRatio: 0.3, creators: [] }; // 60 min, max 2 per creator, ≤30 min per video
 const v = (id: string, minutes: number, creator = id): Video => ({
   videoId: id, title: id, description: "", publishedAt: "", channelId: "UC", creator, priorityWeight: 1,
   durationSeconds: minutes * 60, kind: minutes <= 3 ? "short" : "long",

@@ -13,7 +13,7 @@ export interface Config {
   maxVideoMinutes: number;
   maxVideoShare: number;
   summaryModel: string;
-  mode: "formula" | "ai" | "agent"; // how picks are chosen (see creators.yaml)
+  mode: "formula" | "ai" | "agent"; // how picks are chosen (see config.yaml)
   aiModel: string;
   aiShortlist: number;
   aiWeight: number;

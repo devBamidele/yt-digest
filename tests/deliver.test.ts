@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { deliver, escapeHtml, formatDigest, keyboard } from "../src/deliver.ts";
-import { parseCallback } from "../src/feedback.ts";
 import type { Selection } from "../src/select.ts";
 import type { Video } from "../src/types.ts";
 
@@ -52,7 +51,7 @@ test("buttons: one 👍/👎 row per video, payload fits Telegram's 64 bytes and
   assert.deepEqual(kb.inline_keyboard.map((r) => r.map((b) => b.text)), [["👍", "👎"]]);
   const data = kb.inline_keyboard[0][1].callback_data;
   assert.ok(Buffer.byteLength(data) <= 64);
-  assert.deepEqual(parseCallback(data), { vote: "down", videoId: "abcdefghij1", channelId: "UCsBjURrPoezykLs9EqgamOA" });
+  assert.equal(data, "d|abcdefghij1|UCsBjURrPoezykLs9EqgamOA"); // what the worker splits on "|"
 });
 
 test("header: intro, request and feedback each get their own block; empty kinds are left out", () => {

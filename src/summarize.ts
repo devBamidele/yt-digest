@@ -1,12 +1,8 @@
 // Step 6: 2-sentence summaries from title + description, cached by video ID so reruns cost nothing.
 import Anthropic from "@anthropic-ai/sdk";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
 import { mapLimit } from "./fetch.ts";
 import { fmtDuration } from "./select.ts";
 import type { Video } from "./types.ts";
-
-export const CACHE_PATH = "state/summaries.json";
 
 // Bump when the prompt changes, so cached summaries from the old prompt are regenerated.
 export const PROMPT_VERSION = 2;
@@ -50,15 +46,6 @@ export function fallbackSummary(v: Video): string {
   return first ? first.slice(0, 200) : "(No summary available.)";
 }
 
-export function loadCache(path = CACHE_PATH): Cache {
-  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
-}
-
-function saveCache(cache: Cache, path = CACHE_PATH): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(cache, null, 2));
-}
-
 export interface SummaryStats {
   cached: number;
   generated: number;
@@ -98,19 +85,14 @@ export async function summarizeOne(client: Anthropic, model: string, v: Video) {
   }
 }
 
-/** Where summaries are cached: a file for the single-user setup, the shared database in v3. */
+/** Where summaries are cached: the shared D1 table, via the receiver's API (Store.summaryStore()). */
 export interface SummaryStore {
   get(videoIds: string[]): Promise<Cache>;
   put(entries: Cache): Promise<void>;
 }
 
-const fileStore: SummaryStore = {
-  get: async () => loadCache(),
-  put: async (entries) => saveCache({ ...loadCache(), ...entries }),
-};
-
 /** Adds `summary` to each video. Cached summaries are reused; only new videos call the API. */
-export async function summarize(videos: Video[], model: string, log = console.log, store: SummaryStore = fileStore) {
+export async function summarize(videos: Video[], model: string, log: (s: string) => void, store: SummaryStore) {
   const cache = await store.get(videos.map((v) => v.videoId));
   const fresh_: Cache = {};
   const stats: SummaryStats = { cached: 0, generated: 0, failed: 0, inputTokens: 0, outputTokens: 0 };

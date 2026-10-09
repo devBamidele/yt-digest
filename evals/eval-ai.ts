@@ -8,8 +8,9 @@ import { Store } from "../src/store.ts";
 import { evalConfig } from "./eval-config.ts";
 import { scoreVideo } from "../src/score.ts";
 import { fmtDuration, select } from "../src/select.ts";
-import { blend, rate } from "../src/rank.ts";
-import { evidenceFor, learnTaste, renderLearned } from "../src/taste.ts";
+import { blend, rateUncached } from "../src/rank.ts";
+import { weightsFromVotes } from "../src/feedback.ts";
+import { evidenceFor, learnTaste, renderLearned, tasteText } from "../src/taste.ts";
 import type { Video } from "../src/types.ts";
 import { FIXTURES_PATH, type Fixture } from "./collect-fixtures.ts";
 
@@ -35,10 +36,10 @@ const evidence = (await evidenceFor(state.votes.map((v) => ({ videoId: v.video_i
 );
 console.log(`Building a taste profile from ${evidence.length} taps (none of them on the ${videos.length} labelled videos)…`);
 const learned = await learnTaste(evidence, "", cfg.aiModel);
-const taste = `My own notes:\n(none)\n\nLearned from my feedback:\n${renderLearned(learned, evidence.length).replace(/<!--[\s\S]*?-->/g, "")}`;
+const taste = tasteText("", renderLearned(learned, evidence.length));
 
-// 2. AI ratings for the labelled videos (separate cache, so the live one isn't touched).
-const ratings = await rate(videos, taste, "", cfg.aiModel, { cachePath: "evals/results/ratings-cache.json" });
+// 2. AI ratings for the labelled videos.
+const { ratings } = await rateUncached(videos, taste, "", cfg.aiModel);
 
 // 3. Ranking quality: how often does a "yes" video rank above a "no"? (50% = coin flip)
 function pairwise(scoreOf: (v: Video) => number) {
@@ -67,7 +68,16 @@ if (values.agent) {
   pickers.push([
     "agent",
     async (b) => {
-      const r = await runAgent({ candidates: videos, cfg: { ...cfg, budgetMinutes: b }, taste, request: "", dryRun: true, log: () => {} });
+      const r = await runAgent({
+        candidates: videos,
+        cfg: { ...cfg, budgetMinutes: b },
+        taste,
+        request: "",
+        dryRun: true,
+        log: () => {},
+        notes: [], // no saved agent notes: the eval starts clean
+        weights: weightsFromVotes(state.votes.map((v) => ({ channelId: v.channel_id, vote: v.vote }))),
+      });
       return r.picked;
     },
   ]);

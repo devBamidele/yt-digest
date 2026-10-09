@@ -1,14 +1,11 @@
 // AI taste ranking: Claude rates how well each shortlisted video fits my taste profile (0-10).
 // The rating is blended with the formula, and the budgeted selector still makes the final pick.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
 import { jsonCall } from "./claude.ts";
 import { mapLimit } from "./fetch.ts";
 import { fmtDuration } from "./select.ts";
 import type { Config, Video } from "./types.ts";
 
-export const RATINGS_PATH = "state/ratings.json";
 const BATCH = 25;
 
 export interface Rating {
@@ -74,16 +71,11 @@ async function rateBatch(videos: Video[], taste: string, request: string, model:
   return { ratings: data.ratings, usage };
 }
 
-interface RatingsCache {
-  key: string; // hash of profile + request + model: ratings are only valid for that combination
-  ratings: Record<string, Rating>;
-}
-
 export function ratingsKey(taste: string, request: string, model: string): string {
   return createHash("sha256").update(`${model}\n${request}\n${taste}`).digest("hex").slice(0, 16);
 }
 
-/** Rates videos with no cache: returns what Claude said plus token usage. Failed batches are left out. */
+/** Rates videos: returns what Claude said plus token usage. Failed batches are left out. (Callers cache by ratingsKey.) */
 export async function rateUncached(videos: Video[], taste: string, request: string, model: string, log = console.log) {
   const ratings = new Map<string, Rating>();
   const usage = { input: 0, output: 0 };
@@ -102,41 +94,6 @@ export async function rateUncached(videos: Video[], taste: string, request: stri
     }
   });
   return { ratings, usage };
-}
-
-/** Rates videos, reusing cached ratings made with the same profile, request and model. */
-export async function rate(
-  videos: Video[],
-  taste: string,
-  request: string,
-  model: string,
-  { log = console.log, cachePath = RATINGS_PATH } = {},
-) {
-  const key = ratingsKey(taste, request, model);
-  const cache: RatingsCache = existsSync(cachePath) ? JSON.parse(readFileSync(cachePath, "utf8")) : { key, ratings: {} };
-  if (cache.key !== key) Object.assign(cache, { key, ratings: {} }); // profile or request changed: start over
-
-  const todo = videos.filter((v) => !cache.ratings[v.videoId]);
-  const usage = { input: 0, output: 0 };
-  const batches = Array.from({ length: Math.ceil(todo.length / BATCH) }, (_, i) => todo.slice(i * BATCH, (i + 1) * BATCH));
-  await mapLimit(batches, 3, async (batch) => {
-    try {
-      const r = await rateBatch(batch, taste, request, model);
-      usage.input += r.usage.input;
-      usage.output += r.usage.output;
-      const ids = new Set(batch.map((v) => v.videoId));
-      for (const x of r.ratings) {
-        if (ids.has(x.id)) cache.ratings[x.id] = { fit: Math.max(0, Math.min(10, Math.round(x.fit))), reason: x.reason };
-      }
-    } catch (e) {
-      log(`  ! rating batch failed (${(e as Error).message}); those videos fall back to the formula`);
-    }
-  });
-
-  mkdirSync(dirname(cachePath), { recursive: true });
-  writeFileSync(cachePath, JSON.stringify(cache, null, 2));
-  log(`  AI ratings: ${videos.length - todo.length} cached, ${todo.length} new (${usage.input} in / ${usage.output} out tokens)`);
-  return new Map(videos.filter((v) => cache.ratings[v.videoId]).map((v) => [v.videoId, cache.ratings[v.videoId]]));
 }
 
 /** Formula score → 0-1 percentile within its kind, so shorts and long-form compare fairly. */

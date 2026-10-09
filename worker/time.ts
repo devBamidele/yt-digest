@@ -157,13 +157,6 @@ export function nextDigest(u: Schedule, at = new Date()): string {
   return dayAndTime(t, u, at);
 }
 
-/** Why a one-off digest can't come yet, or null if it can. */
-export function cooldownNotice(u: Schedule, at = new Date()): string | null {
-  const end = cooldownEnds(u);
-  if (!end || at >= end) return null;
-  return `⏳ You get one digest a day. The next one can come ${dayAndTime(end, u, at)} (${countdown(end, at)}).`;
-}
-
 /** The pinned status line, refreshed every few minutes. */
 export function statusLine(u: Schedule, at = new Date()): string {
   if (u.status === "paused") return "⏸ Digests paused · send /resume to restart";

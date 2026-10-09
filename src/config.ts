@@ -1,14 +1,17 @@
-// Step 1: load creators.yaml, validate it, apply per-run overrides.
+// App-wide settings from config.yaml. Personal settings (channels, watch time, shorts mix,
+// delivery time) live per user in D1; multi.ts builds each user's Config from both.
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 import type { Config } from "./types.ts";
 
-export function parseConfig(text: string, budgetOverride?: number): Config {
-  const raw = parse(text) ?? {};
+export interface AppConfig extends Omit<Config, "creators" | "budgetMinutes" | "shortsRatio"> {
+  userDailyCapUsd: number;
+}
 
-  const cfg: Config = {
-    budgetMinutes: budgetOverride ?? raw.daily_budget_minutes ?? 60,
-    shortsRatio: raw.shorts_ratio ?? 0.3,
+/** Parses and validates config.yaml text; anything missing gets its default. */
+export function parseAppConfig(text: string): AppConfig {
+  const raw = parse(text) ?? {};
+  const cfg: AppConfig = {
     shortsMaxSeconds: raw.shorts_max_seconds ?? 180,
     backlogDays: raw.backlog_days ?? 7,
     maxPerCreator: raw.max_per_creator ?? 2,
@@ -21,67 +24,23 @@ export function parseConfig(text: string, budgetOverride?: number): Config {
     aiWeight: raw.ai_weight ?? 0.7,
     minFit: raw.min_fit ?? 4,
     agentMaxToolCalls: raw.agent_max_tool_calls ?? 20,
-    creators: [],
+    userDailyCapUsd: raw.user_daily_cap_usd ?? 0.4,
   };
 
-  if (!(typeof cfg.budgetMinutes === "number" && cfg.budgetMinutes > 0)) {
-    throw new Error(`budget must be a positive number of minutes, got ${cfg.budgetMinutes}`);
-  }
-  if (!(typeof cfg.shortsRatio === "number" && cfg.shortsRatio >= 0 && cfg.shortsRatio <= 1)) {
-    throw new Error(`shorts_ratio must be between 0 and 1, got ${cfg.shortsRatio}`);
-  }
-  if (!(typeof cfg.backlogDays === "number" && cfg.backlogDays > 0)) {
-    throw new Error(`backlog_days must be a positive number, got ${cfg.backlogDays}`);
-  }
-  if (!(Number.isInteger(cfg.maxPerCreator) && cfg.maxPerCreator > 0)) {
-    throw new Error(`max_per_creator must be a positive whole number, got ${cfg.maxPerCreator}`);
-  }
-  if (!(typeof cfg.maxVideoMinutes === "number" && cfg.maxVideoMinutes > 0)) {
-    throw new Error(`max_video_minutes must be a positive number, got ${cfg.maxVideoMinutes}`);
-  }
-  if (!(typeof cfg.maxVideoShare === "number" && cfg.maxVideoShare > 0 && cfg.maxVideoShare <= 1)) {
-    throw new Error(`max_video_share must be between 0 and 1, got ${cfg.maxVideoShare}`);
-  }
-  if (!["formula", "ai", "agent"].includes(cfg.mode)) {
-    throw new Error(`mode must be formula, ai or agent, got ${cfg.mode}`);
-  }
-  if (!(typeof cfg.aiWeight === "number" && cfg.aiWeight >= 0 && cfg.aiWeight <= 1)) {
-    throw new Error(`ai_weight must be between 0 and 1, got ${cfg.aiWeight}`);
-  }
-  if (!Array.isArray(raw.creators) || raw.creators.length === 0) {
-    throw new Error("creators.yaml needs at least one creator");
-  }
-
-  for (const c of raw.creators) {
-    if (typeof c?.id !== "string" || !/^UC[\w-]{22}$/.test(c.id)) {
-      throw new Error(`creator ${JSON.stringify(c)} needs a channel id like UCxxxxxxxxxxxxxxxxxxxxxx`);
-    }
-    const weight = c.priority_weight ?? 1;
-    if (typeof weight !== "number" || weight <= 0) {
-      throw new Error(`creator ${c.id} has an invalid priority_weight: ${weight}`);
-    }
-    cfg.creators.push({ id: c.id, name: c.name ?? c.id, priorityWeight: weight });
-  }
+  const check = (ok: boolean, msg: string) => {
+    if (!ok) throw new Error(`config.yaml: ${msg}`);
+  };
+  const num = (v: unknown) => typeof v === "number" && Number.isFinite(v);
+  check(num(cfg.backlogDays) && cfg.backlogDays > 0, `backlog_days must be a positive number, got ${cfg.backlogDays}`);
+  check(Number.isInteger(cfg.maxPerCreator) && cfg.maxPerCreator > 0, `max_per_creator must be a positive whole number, got ${cfg.maxPerCreator}`);
+  check(num(cfg.maxVideoMinutes) && cfg.maxVideoMinutes > 0, `max_video_minutes must be a positive number, got ${cfg.maxVideoMinutes}`);
+  check(num(cfg.maxVideoShare) && cfg.maxVideoShare > 0 && cfg.maxVideoShare <= 1, `max_video_share must be between 0 and 1, got ${cfg.maxVideoShare}`);
+  check(["formula", "ai", "agent"].includes(cfg.mode), `mode must be formula, ai or agent, got ${cfg.mode}`);
+  check(num(cfg.aiWeight) && cfg.aiWeight >= 0 && cfg.aiWeight <= 1, `ai_weight must be between 0 and 1, got ${cfg.aiWeight}`);
+  check(num(cfg.userDailyCapUsd) && cfg.userDailyCapUsd >= 0, `user_daily_cap_usd must be a number ≥ 0, got ${cfg.userDailyCapUsd}`);
   return cfg;
 }
 
-export function loadConfig(path = "creators.yaml", budgetOverride?: number): Config {
-  return parseConfig(readFileSync(path, "utf8"), budgetOverride);
-}
-
-export interface AppConfig extends Omit<Config, "creators" | "budgetMinutes" | "shortsRatio"> {
-  userDailyCapUsd: number;
-}
-
-/** config.yaml: app-wide defaults only (v3). Personal settings come from the database. */
 export function loadAppConfig(path = "config.yaml"): AppConfig {
-  const text = readFileSync(path, "utf8");
-  const raw = parse(text) ?? {};
-  // Reuse parseConfig's defaults and validation with a placeholder creator.
-  const { creators: _c, budgetMinutes: _b, shortsRatio: _s, ...rest } = parseConfig(
-    `${text}\ncreators:\n  - id: UC0000000000000000000000\n`,
-  );
-  const cap = raw.user_daily_cap_usd ?? 0.4;
-  if (!(typeof cap === "number" && cap >= 0)) throw new Error(`user_daily_cap_usd must be a number ≥ 0, got ${cap}`);
-  return { ...rest, userDailyCapUsd: cap };
+  return parseAppConfig(readFileSync(path, "utf8"));
 }

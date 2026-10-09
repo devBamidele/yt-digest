@@ -1,135 +1,17 @@
-// 👍/👎 feedback from Telegram buttons. There is no always-on server: taps wait in Telegram
-// (for up to 24 h) and are collected at the start of each run, then turned into per-channel weights.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-
-export const FEEDBACK_PATH = "state/feedback.json";
+// 👍/👎 feedback: the button payload, and how votes become per-channel weights.
+// (Taps themselves are received by the worker and stored in D1.)
 
 // Each net 👍 multiplies a channel's weight by STEP, each net 👎 divides by it, within [MIN, MAX].
 export const STEP = 1.5;
 export const MIN_WEIGHT = 0.1;
 export const MAX_WEIGHT = 3;
 
-export interface Vote {
-  vote: "up" | "down";
-  channelId: string;
-  at: string;
-}
-
-export interface FeedbackState {
-  offset: number; // next Telegram update_id to fetch
-  votes: Record<string, Vote>; // by videoId; the latest tap wins, so you can change your mind
-  sinceDigest?: { up: number; down: number }; // taps collected since the last digest, for its header
-  requests?: { text: string; at: string }[]; // messages I sent the bot since the last digest
-}
-
-export function loadFeedback(path = FEEDBACK_PATH): FeedbackState {
-  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : { offset: 0, votes: {} };
-}
-
-export function saveFeedback(state: FeedbackState, path = FEEDBACK_PATH): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(state, null, 2));
-}
-
 /** Button payload; Telegram allows 64 bytes. "u|<11-char video id>|<24-char channel id>" is 38. */
 export function callbackData(vote: "up" | "down", videoId: string, channelId: string): string {
   return `${vote === "up" ? "u" : "d"}|${videoId}|${channelId}`;
 }
 
-export function parseCallback(data: string): { vote: "up" | "down"; videoId: string; channelId: string } | null {
-  const m = data.match(/^([ud])\|([\w-]{6,20})\|(UC[\w-]{22})$/);
-  return m ? { vote: m[1] === "u" ? "up" : "down", videoId: m[2], channelId: m[3] } : null;
-}
-
-/** Applies Telegram updates to the state. Only taps and messages from my own chat count. */
-export function applyUpdates(state: FeedbackState, updates: any[], chatId: string) {
-  let up = 0;
-  let down = 0;
-  for (const u of updates) {
-    state.offset = Math.max(state.offset, u.update_id + 1);
-    const m = u.message;
-    if (m && String(m.chat?.id) === chatId && typeof m.text === "string" && !m.text.startsWith("/")) {
-      (state.requests ??= []).push({ text: m.text.slice(0, 1000), at: new Date(m.date * 1000).toISOString() });
-      continue;
-    }
-    const q = u.callback_query;
-    if (!q || String(q.message?.chat?.id) !== chatId) continue;
-    const c = parseCallback(q.data ?? "");
-    if (!c) continue;
-    state.votes[c.videoId] = { vote: c.vote, channelId: c.channelId, at: new Date(q.message?.date * 1000 || Date.now()).toISOString() };
-    c.vote === "up" ? up++ : down++;
-  }
-  return { up, down };
-}
-
-/**
- * Updates with update_id ≥ offset. With the always-on receiver (EVENTS_URL + EVENTS_TOKEN), they come
- * from its store; otherwise straight from Telegram's getUpdates (which only keeps them 24 hours).
- */
-async function fetchUpdates(token: string, offset: number): Promise<{ result: any[] }> {
-  const url = process.env.EVENTS_URL;
-  const key = process.env.EVENTS_TOKEN;
-  let res: Response;
-  if (url && key) {
-    res = await fetch(`${url.replace(/\/$/, "")}/events?after=${offset}`, { headers: { Authorization: `Bearer ${key}` } });
-  } else {
-    const qs = new URLSearchParams({ offset: String(offset), allowed_updates: JSON.stringify(["callback_query", "message"]) });
-    res = await fetch(`https://api.telegram.org/bot${token}/getUpdates?${qs}`);
-  }
-  const body = await res.json().catch(() => ({ ok: false, description: `HTTP ${res.status}` }));
-  if (!body.ok) throw new Error(`fetching updates failed: ${body.description ?? res.status}`);
-  return body;
-}
-
-/** Fetches pending taps and messages and records them. Returns how many taps arrived this time. */
-export async function collectFeedback(log = console.log) {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) throw new Error("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set");
-
-  const state = loadFeedback();
-  const body = await fetchUpdates(token, state.offset);
-
-  const counts = applyUpdates(state, body.result, chatId);
-  const since = state.sinceDigest ?? { up: 0, down: 0 };
-  state.sinceDigest = { up: since.up + counts.up, down: since.down + counts.down };
-  saveFeedback(state);
-  log(
-    `Feedback: ${counts.up} 👍, ${counts.down} 👎 collected (${Object.keys(state.votes).length} votes in total); ` +
-      `${state.requests?.length ?? 0} request message(s) waiting`,
-  );
-  return counts;
-}
-
-/** Taps collected since the last digest (including by the 6am run); `reset` once the digest is sent. */
-export function tapsSinceDigest(path = FEEDBACK_PATH) {
-  return loadFeedback(path).sinceDigest ?? { up: 0, down: 0 };
-}
-
-export function resetTapsSinceDigest(path = FEEDBACK_PATH): void {
-  const state = loadFeedback(path);
-  state.sinceDigest = { up: 0, down: 0 };
-  saveFeedback(state, path);
-}
-
-/** Messages I sent the bot since the last digest. */
-export function pendingRequests(path = FEEDBACK_PATH): { text: string; at: string }[] {
-  return loadFeedback(path).requests ?? [];
-}
-
-/** Called once a digest (or a skip message) has gone out: the requests have been used. */
-export function clearRequests(path = FEEDBACK_PATH): void {
-  const state = loadFeedback(path);
-  state.requests = [];
-  saveFeedback(state, path);
-}
-
 /** Per-channel weight multipliers learned from votes: STEP^(👍 − 👎), clamped. */
-export function channelWeights(state: FeedbackState): Map<string, { weight: number; up: number; down: number }> {
-  return weightsFromVotes(Object.values(state.votes));
-}
-
 export function weightsFromVotes(votes: { channelId: string; vote: "up" | "down" }[]): Map<string, { weight: number; up: number; down: number }> {
   const tally = new Map<string, { up: number; down: number }>();
   for (const v of votes) {
@@ -144,4 +26,3 @@ export function weightsFromVotes(votes: { channelId: string; vote: "up" | "down"
   }
   return out;
 }
-

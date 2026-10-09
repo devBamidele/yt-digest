@@ -1,16 +1,9 @@
-// Taste profile: a short, human-readable description of what I like, in state/taste.md.
-// "My notes" is mine to edit and is never touched; "Learned from your feedback" is rewritten
-// by Claude from 👍/👎 taps and hand labels.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+// Taste profile: what someone likes, in two parts. "Notes" are their own words (set in the bot,
+// never rewritten); "learned" is written by Claude from their 👍/👎. Both live in D1.
 import { jsonCall } from "./claude.ts";
 import { videoInfo } from "./fetch.ts";
-import { loadFeedback } from "./feedback.ts";
 import { fmtDuration } from "./select.ts";
 
-export const TASTE_PATH = "state/taste.md";
-const NOTES = "## My notes";
-const LEARNED = "## Learned from your feedback";
 // Rebuild the learned section once this many new votes have arrived.
 export const REBUILD_AFTER_VOTES = 3;
 
@@ -29,32 +22,7 @@ interface Learned {
   summary: string;
 }
 
-const TEMPLATE = `# Taste profile
-
-${NOTES}
-<!-- Write anything here: topics, moods, channels. Claude reads this section but never changes it. -->
-
-${LEARNED}
-<!-- Rewritten by Claude from your 👍/👎. -->
-(Nothing learned yet.)
-`;
-
-export function readTaste(path = TASTE_PATH): { notes: string; learned: string; votesUsed: number; full: string } {
-  const full = existsSync(path) ? readFileSync(path, "utf8") : TEMPLATE;
-  const i = full.indexOf(NOTES);
-  const j = full.indexOf(LEARNED);
-  const notes = i >= 0 ? full.slice(i + NOTES.length, j >= 0 ? j : undefined).trim() : "";
-  const learned = j >= 0 ? full.slice(j + LEARNED.length).trim() : "";
-  const votesUsed = Number(full.match(/from (\d+) votes/)?.[1] ?? 0);
-  return { notes, learned, votesUsed, full };
-}
-
-/** The profile as Claude sees it, without the HTML comments. */
-export function tasteForPrompt(path = TASTE_PATH): string {
-  const { notes, learned } = readTaste(path);
-  return tasteText(notes, learned);
-}
-
+/** The profile as Claude sees it: their notes, then what was learned (HTML comments dropped). */
 export function tasteText(notes: string, learned: string): string {
   const strip = (s: string) => s.replace(/<!--[\s\S]*?-->/g, "").trim();
   return [`My own notes:\n${strip(notes) || "(none)"}`, `Learned from my feedback:\n${strip(learned) || "(nothing yet)"}`].join(
@@ -115,20 +83,7 @@ export function renderLearned(l: Learned, votes: number, date = new Date()): str
   ].join("\n\n");
 }
 
-/** Replaces only the learned section; "My notes" is kept byte for byte. */
-export function writeLearned(learnedMd: string, path = TASTE_PATH): void {
-  const { full } = readTaste(path);
-  const j = full.indexOf(LEARNED);
-  const head = j >= 0 ? full.slice(0, j) : full.trimEnd() + "\n\n";
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${head}${LEARNED}\n${learnedMd}\n`);
-}
-
-/** All 👍/👎 taps, with titles and descriptions looked up from YouTube. */
-export async function evidenceFromVotes(): Promise<Evidence[]> {
-  return evidenceFor(Object.entries(loadFeedback().votes).map(([videoId, v]) => ({ videoId, vote: v.vote })));
-}
-
+/** Votes with each video's title and description looked up from YouTube. */
 export async function evidenceFor(votes: { videoId: string; vote: "up" | "down" }[]): Promise<Evidence[]> {
   const info = await videoInfo(votes.map((v) => v.videoId));
   return votes
@@ -138,17 +93,3 @@ export async function evidenceFor(votes: { videoId: string; vote: "up" | "down" 
       return { vote: v.vote, title: i.title, creator: i.creator, description: i.description, durationSeconds: i.durationSeconds };
     });
 }
-
-/** Rebuilds the learned section if enough new votes arrived (or `force`). Returns true if it changed. */
-export async function maybeUpdateTaste(model: string, { force = false, log = console.log } = {}): Promise<boolean> {
-  const total = Object.keys(loadFeedback().votes).length;
-  const { notes, votesUsed } = readTaste();
-  if (!force && (total === 0 || total - votesUsed < REBUILD_AFTER_VOTES)) return false;
-  const evidence = await evidenceFromVotes();
-  if (evidence.length === 0) return false;
-  const learned = await learnTaste(evidence, notes, model);
-  writeLearned(renderLearned(learned, total));
-  log(`Taste profile updated from ${total} votes (${TASTE_PATH})`);
-  return true;
-}
-
