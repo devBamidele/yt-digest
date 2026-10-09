@@ -3,6 +3,7 @@
 import { subsFromCsv, type Sub } from "../src/subs.ts";
 import * as db from "./db.ts";
 import { connectLink, SubsError, subscriptionsForHandle } from "./google.ts";
+import { refreshStatus } from "./status.ts";
 import { amPmChoices, fmtTime, nextDigest, parseChoice, parseTime } from "./time.ts";
 
 export type Tg = (method: string, payload: Record<string, unknown>) => Promise<any>;
@@ -129,8 +130,10 @@ async function finish(ctx: OnboardingCtx, chatId: string) {
     text:
       `🎉 <b>You're set!</b>\n\n• ${channels} channels\n• ${u.budget_minutes} min a day, ${mix}\n• Every day at ${fmtTime(u.delivery_hour, u.delivery_minute)} (${u.timezone})\n\n` +
       `Your first digest arrives ${nextDigest(u)}.\n\n` +
-      `Message me any time to change a day ("30 min, only shorts, something funny"), tap 👍/👎 on videos to teach me, and use /settings to change your defaults.`,
+      `Message me any time to change a day ("30 min, only shorts, something funny"), tap 👍/👎 on videos to teach me, and use /settings to change your defaults.\n\n` +
+      `📌 The pinned message at the top always shows when your next digest arrives.`,
   });
+  await refreshStatus(ctx.db, ctx.tg, (await db.getUser(ctx.db, chatId))!);
 }
 
 async function imported(ctx: OnboardingCtx, chatId: string, subs: Sub[], how: string) {

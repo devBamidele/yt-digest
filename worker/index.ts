@@ -9,7 +9,8 @@ import * as db from "./db.ts";
 import { authUrl, exchangeCode, mySubscriptions, randomToken, SubsError, verifyConnect } from "./google.ts";
 import { handleCommand, handleSettingInput, handleSettingsCallback } from "./commands.ts";
 import { handleOnboarding, importCsvDocument, importedFromGoogle, prompt, type OnboardingCtx } from "./onboarding.ts";
-import { fmtTime, friendlyTime, localClock, nextDigest, nextOccurrence } from "./time.ts";
+import { cooldownNotice, fmtTime, friendlyTime, localClock, nextDigest, nextOccurrence } from "./time.ts";
+import { refreshAll, refreshStatus } from "./status.ts";
 
 interface Env {
   DB: db.D1;
@@ -136,8 +137,14 @@ async function handleRequest(env: Env, user: db.User, text: string, at: string) 
     }
     if (r.deliver_at) {
       const when = r.deliver_at === "now" ? now : nextOccurrence({ hour: Number(r.deliver_at.slice(0, 2)), minute: Number(r.deliver_at.slice(3)) }, user.timezone, now);
-      await db.updateUser(env.DB, chat_id, { next_digest_at: when.toISOString() });
-      u = { ...u, next_digest_at: when.toISOString() };
+      const blocked = cooldownNotice(u, when);
+      if (blocked) {
+        // One digest a day: a one-off inside the cooldown isn't scheduled.
+        lines.push(blocked);
+      } else {
+        await db.updateUser(env.DB, chat_id, { next_digest_at: when.toISOString() });
+        u = { ...u, next_digest_at: when.toISOString() };
+      }
     }
     if (r.skip_today) reply = `👌 Okay, I'll skip your next digest.`;
     else if (r.summary || r.daily_time || r.deliver_at) {
@@ -150,6 +157,8 @@ async function handleRequest(env: Env, user: db.User, text: string, at: string) 
     reply = `✅ Got it. I'll use this for your next digest (${nextDigest(user)}).`;
   }
   await telegram(env, "sendMessage", { chat_id, text: reply, parse_mode: "HTML" });
+  const fresh = await db.getUser(env.DB, chat_id);
+  if (fresh) await refreshStatus(env.DB, (m, p) => telegram(env, m, p), fresh);
 }
 
 async function handleUpdate(env: Env, update: any, origin: string) {
@@ -269,6 +278,10 @@ export async function hourly(env: Env, scheduledTime: number): Promise<string> {
 
 export default {
   async scheduled(event: { scheduledTime: number }, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }) {
+    // Keep everyone's pinned "next digest" countdown current.
+    ctx.waitUntil(
+      refreshAll(env.DB, (m, p) => telegram(env, m, p), new Date(event.scheduledTime)).catch((e) => console.log(`status refresh failed: ${e}`)),
+    );
     ctx.waitUntil(
       hourly(env, event.scheduledTime).then(
         (r) => console.log(`hourly: ${r}`),

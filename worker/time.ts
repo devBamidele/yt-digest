@@ -38,8 +38,12 @@ export function friendlyTime(hour: number, minute = 0): string {
 }
 
 /** Minutes since local midnight, and the local date, in a time zone. */
+const formatters = new Map<string, Intl.DateTimeFormat>();
+
 export function localClock(at: Date, timezone: string): { minutes: number; date: string } {
-  const parts = new Intl.DateTimeFormat("en-CA", {
+  let fmt = formatters.get(timezone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
     year: "numeric",
     month: "2-digit",
@@ -47,10 +51,17 @@ export function localClock(at: Date, timezone: string): { minutes: number; date:
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
-  }).formatToParts(at);
+    });
+    formatters.set(timezone, fmt); // creating formatters is the expensive part
+  }
+  const parts = fmt.formatToParts(at);
   const get = (t: string) => parts.find((p) => p.type === t)!.value;
   return { minutes: Number(get("hour")) * 60 + Number(get("minute")), date: `${get("year")}-${get("month")}-${get("day")}` };
 }
+
+// At most one digest per day: a new one can't start until this long after the last. A little under
+// 24h, because digests land a few minutes after their check and a strict 24h would drift later daily.
+export const COOLDOWN_HOURS = 23;
 
 interface Schedule {
   timezone: string;
@@ -58,6 +69,7 @@ interface Schedule {
   delivery_minute: number;
   last_digest_at: string | null;
   next_digest_at?: string | null; // one-off time from a message ("send it at 11:10pm", "now")
+  status?: string; // "paused" users get no digests
 }
 
 /** A one-off time is pending if it hasn't been delivered yet. */
@@ -65,11 +77,22 @@ const oneOffPending = (u: Schedule) => !!u.next_digest_at && (!u.last_digest_at 
 
 const sentToday = (u: Schedule, at: Date) => u.last_digest_at !== null && localClock(new Date(u.last_digest_at), u.timezone).date === localClock(at, u.timezone).date;
 
+/** When the cooldown since the last digest ends (null if there's never been a digest). */
+export function cooldownEnds(u: Schedule): Date | null {
+  return u.last_digest_at ? new Date(Date.parse(u.last_digest_at) + COOLDOWN_HOURS * 3600_000) : null;
+}
+
+const coolingDown = (u: Schedule, at: Date) => {
+  const end = cooldownEnds(u);
+  return end !== null && at < end;
+};
+
 /**
- * Due if a one-off time from a message has come, or it's at or just after their daily time
- * (within the catch-up window) and they haven't had today's digest.
+ * Due if, outside the cooldown, a one-off time from a message has come, or it's at or just after
+ * their daily time (within the catch-up window) and they haven't had today's digest.
  */
 export function isDue(u: Schedule, at = new Date()): boolean {
+  if (u.status === "paused" || coolingDown(u, at)) return false;
   if (oneOffPending(u)) {
     const t = Date.parse(u.next_digest_at!);
     if (at.getTime() >= t && at.getTime() < t + CATCH_UP_MINUTES * 60_000) return true;
@@ -80,21 +103,73 @@ export function isDue(u: Schedule, at = new Date()): boolean {
   return now >= target && now < target + CATCH_UP_MINUTES && !sentToday(u, at);
 }
 
-/** "today at 10:30pm", "tomorrow at 6pm" or "in the next few minutes". */
-export function nextDigest(u: Schedule, at = new Date()): string {
+/** The moment the next digest is due (to the minute), or null if paused. */
+export function nextDigestTime(u: Schedule, at = new Date()): Date | null {
+  if (u.status === "paused") return null;
+  if (isDue(u, at)) return at;
+  const end = cooldownEnds(u);
   if (oneOffPending(u)) {
-    const t = Date.parse(u.next_digest_at!);
-    if (at.getTime() >= t - 60_000) return "in the next few minutes";
-    const local = localClock(new Date(t), u.timezone);
-    const day = local.date === localClock(at, u.timezone).date ? "today" : "tomorrow";
-    return `${day} at ${friendlyTime(Math.floor(local.minutes / 60), local.minutes % 60)}`;
+    const t = new Date(u.next_digest_at!);
+    if (t > at) return end && end > t ? end : t;
   }
-  const now = localClock(at, u.timezone).minutes;
+  // The daily slot today, tomorrow, …: the first one whose window, after the cooldown, is still open.
+  const step = STEP_MINUTES * 60_000;
+  const nowMin = localClock(at, u.timezone).minutes;
   const target = u.delivery_hour * 60 + u.delivery_minute;
-  const when = friendlyTime(u.delivery_hour, u.delivery_minute);
-  if (isDue(u, at)) return "in the next few minutes";
-  if (now < target && !sentToday(u, at)) return `today at ${when}`;
-  return `tomorrow at ${when}`;
+  const atMinute = Math.floor(at.getTime() / 60_000) * 60_000; // ignore seconds, or 20:30 would round to 20:35
+  for (let day = 0; day <= 3; day++) {
+    const slot = atMinute + (target - nowMin + day * 1440) * 60_000;
+    const closes = slot + CATCH_UP_MINUTES * 60_000;
+    let t = Math.max(slot, at.getTime(), end ? end.getTime() : 0);
+    t = Math.ceil(t / step) * step; // checks run on 5-minute marks
+    if (t < closes && isDue(u, new Date(t))) return new Date(t);
+  }
+  return null;
+}
+
+/** "in 9h 40m", "in 35m", "in under a minute". */
+export function countdown(to: Date, at = new Date()): string {
+  const mins = Math.ceil((to.getTime() - at.getTime()) / 60_000);
+  if (mins <= 0) return "in under a minute";
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `in ${h ? `${h}h` : ""}${h && m ? " " : ""}${m || !h ? `${m}m` : ""}`;
+}
+
+/** "Sat 11:00am" in their time zone, or "today at"/"tomorrow at" when close. */
+function dayAndTime(d: Date, u: Schedule, at: Date): string {
+  const local = localClock(d, u.timezone);
+  const time = friendlyTime(Math.floor(local.minutes / 60), local.minutes % 60);
+  const today = localClock(at, u.timezone).date;
+  const tomorrow = localClock(new Date(at.getTime() + 86400_000), u.timezone).date;
+  if (local.date === today) return `today at ${time}`;
+  if (local.date === tomorrow) return `tomorrow at ${time}`;
+  return `${d.toLocaleDateString("en-GB", { timeZone: u.timezone, weekday: "short" })} at ${time}`;
+}
+
+/** "today at 10:30pm", "tomorrow at 6pm", "in the next few minutes" (cooldown included). */
+export function nextDigest(u: Schedule, at = new Date()): string {
+  const t = nextDigestTime(u, at);
+  if (!t) return "when you /resume";
+  if (t.getTime() - at.getTime() < STEP_MINUTES * 60_000) return "in the next few minutes";
+  return dayAndTime(t, u, at);
+}
+
+/** Why a one-off digest can't come yet, or null if it can. */
+export function cooldownNotice(u: Schedule, at = new Date()): string | null {
+  const end = cooldownEnds(u);
+  if (!end || at >= end) return null;
+  return `⏳ You get one digest a day. The next one can come ${dayAndTime(end, u, at)} (${countdown(end, at)}).`;
+}
+
+/** The pinned status line, refreshed every few minutes. */
+export function statusLine(u: Schedule, at = new Date()): string {
+  if (u.status === "paused") return "⏸ Digests paused · send /resume to restart";
+  const t = nextDigestTime(u, at);
+  if (!t) return "📺 No digest scheduled";
+  if (t.getTime() - at.getTime() < STEP_MINUTES * 60_000) return "📺 Your digest is on its way…";
+  const cool = coolingDown(u, at) ? " · ⏳ one a day" : "";
+  return `📺 Next digest: ${dayAndTime(t, u, at)} · ${countdown(t, at)}${cool}`;
 }
 
 /**

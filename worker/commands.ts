@@ -4,7 +4,14 @@
 import * as db from "./db.ts";
 import { connectLink } from "./google.ts";
 import { MIXES, parseTimezone, type OnboardingCtx } from "./onboarding.ts";
-import { amPmChoices, fmtTime, nextDigest, parseChoice, parseTime, type ClockTime } from "./time.ts";
+import { refreshStatus } from "./status.ts";
+import { amPmChoices, cooldownEnds, countdown, fmtTime, nextDigest, nextDigestTime, parseChoice, parseTime, type ClockTime } from "./time.ts";
+
+/** Refresh the pinned countdown after anything that changes the next digest. */
+async function refresh(ctx: OnboardingCtx, chatId: string) {
+  const u = await db.getUser(ctx.db, chatId);
+  if (u) await refreshStatus(ctx.db, ctx.tg, u);
+}
 
 export const COMMANDS: [string, string][] = [
   ["settings", "Change watch time, mix, delivery time, time zone or interests"],
@@ -25,13 +32,17 @@ async function send(ctx: OnboardingCtx, chat_id: string, text: string, keyboard?
 
 async function showSettings(ctx: OnboardingCtx, u: db.User) {
   const taste = String((await db.userState(ctx.db, u.chat_id))!.taste.notes ?? "");
+  const next = nextDigestTime(u);
+  const end = cooldownEnds(u);
+  const cooling = end !== null && end > new Date();
+  const nextLine = next ? `⏭ Next digest: ${nextDigest(u)} (${countdown(next)})${cooling ? "\n⏳ One digest a day: a new time applies once the cooldown ends" : ""}` : "⏸ Paused";
   await send(
     ctx,
     u.chat_id,
-    `⚙️ <b>Your settings</b>\n\n• Watch time: ${u.budget_minutes} min\n• Mix: ${mixLabel(u.shorts_ratio)}\n• Delivery: ${at(u)} (${u.timezone})\n• Interests: ${taste ? `<i>${taste.replace(/</g, "&lt;").slice(0, 200)}</i>` : "(none yet)"}\n• Status: ${u.status === "paused" ? "⏸ paused" : "▶️ active"}\n\nWhat would you like to change?`,
+    `⚙️ <b>Your settings</b>\n\n• Watch time: ${u.budget_minutes} min\n• Mix: ${mixLabel(u.shorts_ratio)}\n• Delivery: ${at(u)} (${u.timezone})\n• Interests: ${taste ? `<i>${taste.replace(/</g, "&lt;").slice(0, 200)}</i>` : "(none yet)"}\n• Status: ${u.status === "paused" ? "⏸ paused" : "▶️ active"}\n\n${nextLine}\n\nWhat would you like to change?`,
     [
       [btn("⏱ Watch time", "set|budget"), btn("⚡ Mix", "set|mix")],
-      [btn("🕕 Delivery time", "set|hour"), btn("🌍 Time zone", "set|timezone")],
+      [btn(`🕕 Delivery time${next ? ` · next ${countdown(next)}` : ""}`, "set|hour"), btn("🌍 Time zone", "set|timezone")],
       [btn("💬 Interests", "set|taste")],
     ],
   );
@@ -57,10 +68,12 @@ export async function handleCommand(ctx: OnboardingCtx, u: db.User, text: string
     case "pause":
       await db.updateUser(ctx.db, chat, { status: "paused" });
       await send(ctx, chat, "⏸ Paused. No digests until you send /resume.");
+      await refresh(ctx, chat);
       return true;
     case "resume":
       await db.updateUser(ctx.db, chat, { status: "active" });
-      await send(ctx, chat, `▶️ Back on. Next digest ${nextDigest(u)}.`);
+      await send(ctx, chat, `▶️ Back on. Next digest ${nextDigest({ ...u, status: "active" })}.`);
+      await refresh(ctx, chat);
       return true;
     case "delete":
       await send(ctx, chat, "🗑 This erases your channels, settings, 👍/👎 history and everything else I have about you. It can't be undone.", [
@@ -155,8 +168,10 @@ async function setDeliveryTime(ctx: OnboardingCtx, u: db.User, t: ClockTime, rou
   await send(
     ctx,
     u.chat_id,
-    `✓ Delivery time: ${fmtTime(t.hour, t.minute)} (${u.timezone})${rounded ? " (I deliver in 5-minute steps)" : ""}. Next digest ${nextDigest(updated)}.`,
+    `✓ Delivery time: ${fmtTime(t.hour, t.minute)} (${u.timezone})${rounded ? " (I deliver in 5-minute steps)" : ""}.\nNext digest ${nextDigest(updated)}.` +
+      (cooldownEnds(updated) && cooldownEnds(updated)! > new Date() ? "\n⏳ You get one digest a day, so the new time applies once the cooldown since your last one ends." : ""),
   );
+  await refresh(ctx, u.chat_id);
 }
 
 /** Typed replies to /settings questions (time, time zone, interests). Returns true if handled. */
@@ -184,6 +199,7 @@ export async function handleSettingInput(ctx: OnboardingCtx, u: db.User, text: s
       }
       await db.updateUser(ctx.db, chat, { timezone: tz, step: "done" });
       await send(ctx, chat, `✓ Time zone: ${tz}`);
+      await refresh(ctx, chat);
       return true;
     }
     case "set_taste":

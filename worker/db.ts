@@ -32,6 +32,8 @@ export interface User {
   created_at: string;
   last_digest_at: string | null;
   next_digest_at: string | null;
+  status_message_id: number | null;
+  status_text: string | null;
 }
 
 export const SENT_KEEP_DAYS = 30;
@@ -263,6 +265,10 @@ export async function takeOAuthState(db: D1, state: string) {
 export async function deleteUser(db: D1, chatId: string) {
   const tables = ["creators", "votes", "sent", "requests", "taste", "agent_notes", "ratings", "usage", "oauth_states", "users"];
   await db.batch(tables.map((t) => db.prepare(`DELETE FROM ${t} WHERE chat_id = ?`).bind(chatId)));
+}
+
+export async function setStatusMessage(db: D1, chatId: string, messageId: number, text: string) {
+  await db.prepare("UPDATE users SET status_message_id = ?, status_text = ? WHERE chat_id = ?").bind(messageId, text, chatId).run();
 }
 
 // ---------- health ----------

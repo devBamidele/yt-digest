@@ -26,7 +26,7 @@ before(async () => {
   globalThis.fetch = (async (url: string, init: any) => {
     if (String(url).startsWith("https://api.telegram.org/")) {
       sent.push({ method: String(url).split("/").pop()!, body: JSON.parse(init.body) });
-      return new Response(JSON.stringify({ ok: true, result: {} }));
+      return new Response(JSON.stringify({ ok: true, result: { message_id: sent.length } })); // like Telegram
     }
     return realFetch(url, init);
   }) as any;
@@ -50,7 +50,9 @@ async function update(u: any) {
 let id = 100;
 const msg = (chat: string, text: string, extra: object = {}) => update({ update_id: id++, message: { chat: { id: Number(chat), type: "private" }, from: { first_name: "Ada" }, date: 1_780_000_000, text, ...extra } });
 const tap = (chat: string, data: string) => update({ update_id: id++, callback_query: { id: `q${id}`, data, message: { message_id: 5, chat: { id: Number(chat) } } } });
-const lastText = () => sent.filter((s) => s.method === "sendMessage").at(-1)?.body.text as string;
+// The last message the bot sent, ignoring the pinned status line it refreshes after changes.
+const isStatus = (t: string) => /^(📺|⏸)/.test(t ?? "");
+const lastText = () => sent.filter((s) => s.method === "sendMessage" && !isStatus(s.body.text)).at(-1)?.body.text as string;
 
 test("strangers get the invite-only message and no account", async () => {
   sent = [];
@@ -89,6 +91,9 @@ test("full onboarding with an invite: connect → budget → mix → hour → ti
   assert.match(lastText(), /Step 6 of 6/);
   await msg("200", "tech reviews and Nigerian food, no crypto");
   assert.match(lastText(), /You're set!/);
+  // The live "next digest" status is posted and pinned.
+  assert.ok(sent.some((x) => x.method === "sendMessage" && /^📺 /.test(x.body.text)));
+  assert.ok(sent.some((x) => x.method === "pinChatMessage"));
   assert.match(lastText(), /3 channels\n• 90 min a day, mostly shorts\n• Every day at 20:30 \(Africa\/Accra\)/);
 
   const u = (await db.getUser(env.DB, "200"))!;
@@ -187,7 +192,7 @@ test("/settings: buttons change watch time and mix; typed answers change time an
   assert.match(lastText(), /✓ Delivery time: 07:00/);
   await tap("200", "set|hour");
   await msg("200", "7:15am");
-  assert.match(lastText(), /✓ Delivery time: 07:15 .*Next digest/);
+  assert.match(lastText(), /✓ Delivery time: 07:15 [\s\S]*Next digest/);
   await tap("200", "set|timezone");
   await msg("200", "London");
   const u = (await db.getUser(env.DB, "200"))!;

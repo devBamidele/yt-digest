@@ -14,7 +14,9 @@ CREATE TABLE IF NOT EXISTS users (
   is_owner INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   last_digest_at TEXT,                        -- taps after this count as "since the last digest"
-  next_digest_at TEXT                         -- one-off delivery time from a message (UTC), if any
+  next_digest_at TEXT,                        -- one-off delivery time from a message (UTC), if any
+  status_message_id INTEGER,                  -- the pinned "next digest" message
+  status_text TEXT                            -- its current text (to skip edits when unchanged)
 );
 
 CREATE TABLE IF NOT EXISTS invites (
