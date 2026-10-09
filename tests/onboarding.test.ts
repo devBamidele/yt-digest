@@ -301,3 +301,54 @@ test("sign-in callback answers the browser at once and imports in the background
   await Promise.all(pending2);
   assert.equal(sent.length, 0);
 });
+
+// Stand-in for Claude reading a request. The SDK client keeps the fetch it first saw, so install one
+// stand-in and switch what it returns.
+let claudeParse: object = {};
+let claudeInstalled = false;
+function fakeClaude(parse: object) {
+  claudeParse = parse;
+  if (!claudeInstalled) {
+    claudeInstalled = true;
+    const prev = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      if (String(url).includes("api.anthropic.com")) {
+        return new Response(JSON.stringify({
+          id: "msg", type: "message", role: "assistant", model: "m", stop_reason: "end_turn", stop_sequence: null,
+          content: [{ type: "text", text: JSON.stringify({ budget_minutes: 0, shorts_share: -1, avoid: [], prefer: [], skip_today: false, deliver_at: "", daily_time: "", summary: "", ...claudeParse }) }],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }), { headers: { "Content-Type": "application/json" } });
+      }
+      return prev(url, init);
+    }) as any;
+  }
+  return () => {};
+}
+
+test("messages: refused 'send it now' is plain, questions get the time, only content changes are stored", async () => {
+  const code = await db.createInvite(env.DB, "1");
+  await msg("700", `/start ${code}`);
+  await db.updateUser(env.DB, "700", { status: "active", step: "done", delivery_hour: 0, delivery_minute: 30 });
+  await env.DB.prepare("UPDATE users SET last_digest_at = ? WHERE chat_id = '700'").bind(new Date(Date.now() - 3600_000).toISOString()).run();
+
+  let restore = fakeClaude({ deliver_at: "now", summary: "Send digest now" });
+  sent = [];
+  await msg("700", "Send it now");
+  restore();
+  let reply = lastText();
+  assert.match(reply, /^⏳ You get one digest a day, so I can't send one now\.\n📺 Next digest: .+ \(in .+\)\.$/);
+  assert.doesNotMatch(reply, /Got it/);
+
+  restore = fakeClaude({});
+  await msg("700", "When is the next digest exactly?");
+  restore();
+  assert.match(lastText(), /📺 Next digest: /);
+
+  restore = fakeClaude({ budget_minutes: 30, summary: "30 min" });
+  await msg("700", "only 30 min tonight");
+  restore();
+  assert.match(lastText(), /✅ For your next digest: <b>30 min<\/b>\./);
+
+  const stored = (await db.userState(env.DB, "700"))!.requests.map((r: any) => r.text);
+  assert.deepEqual(stored, ["only 30 min tonight"]); // not "Send it now", not the question
+});

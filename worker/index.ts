@@ -9,7 +9,7 @@ import * as db from "./db.ts";
 import { authUrl, exchangeCode, mySubscriptions, randomToken, SubsError, verifyConnect } from "./google.ts";
 import { handleCommand, handleSettingInput, handleSettingsCallback } from "./commands.ts";
 import { handleOnboarding, importCsvDocument, importedFromGoogle, prompt, type OnboardingCtx } from "./onboarding.ts";
-import { cooldownNotice, fmtTime, friendlyTime, localClock, nextDigest, nextOccurrence } from "./time.ts";
+import { cooldownEnds, countdown, fmtTime, friendlyTime, localClock, nextDigest, nextDigestTime, nextOccurrence } from "./time.ts";
 import { refreshAll, refreshStatus } from "./status.ts";
 
 interface Env {
@@ -112,51 +112,57 @@ async function handleActive(env: Env, user: db.User, update: any, ctx: Onboardin
     return;
   }
   if (user.step.startsWith("set_") && (await handleSettingInput(ctx, user, m.text))) return;
-  const at = new Date(m.date * 1000).toISOString();
-  await db.addRequest(env.DB, user.chat_id, m.text, at);
-  await handleRequest(env, user, m.text, at);
+  await handleRequest(env, user, m.text, new Date(m.date * 1000).toISOString());
 }
 
-/** Reads a request right away: applies delivery-time changes and says exactly what will happen. */
+/**
+ * Reads a message right away. Time changes (one-off or everyday) are applied now; content changes
+ * (watch time, mix, topics, skip) are stored for the next digest; questions are just answered.
+ * Every reply ends with exactly when the next digest arrives.
+ */
 async function handleRequest(env: Env, user: db.User, text: string, at: string) {
   const chat_id = user.chat_id;
   const now = new Date();
   const local = localClock(now, user.timezone);
   const localNow = `${local.date} ${fmtTime(Math.floor(local.minutes / 60), local.minutes % 60)} (${user.timezone}); usual digest time ${fmtTime(user.delivery_hour, user.delivery_minute)}`;
-  let reply: string;
+  const lines: string[] = [];
+  let u = user;
   try {
     process.env.ANTHROPIC_API_KEY = env.ANTHROPIC_API_KEY;
     const r = await parseRequests([{ text, at }], env.AI_MODEL, { localNow });
-    let u = user;
-    const lines: string[] = [];
+    const changesContent = r.budget_minutes > 0 || r.shorts_share >= 0 || r.avoid.length > 0 || r.prefer.length > 0 || r.skip_today;
+    if (changesContent) await db.addRequest(env.DB, chat_id, text, at); // the digest run reads these
+
+    if (r.skip_today) lines.push("👌 Okay, I'll skip your next digest.");
     if (r.daily_time) {
       const [h, mi] = r.daily_time.split(":").map(Number);
-      await db.updateUser(env.DB, chat_id, { delivery_hour: h, delivery_minute: mi - (mi % 5) });
-      u = { ...u, delivery_hour: h, delivery_minute: mi - (mi % 5) };
-      lines.push(`Your everyday time is now <b>${fmtTime(h, mi - (mi % 5))}</b>.`);
+      const m5 = mi - (mi % 5);
+      await db.updateUser(env.DB, chat_id, { delivery_hour: h, delivery_minute: m5 });
+      u = { ...u, delivery_hour: h, delivery_minute: m5 };
+      lines.push(`✅ Your everyday time is now <b>${fmtTime(h, m5)}</b>.`);
     }
     if (r.deliver_at) {
       const when = r.deliver_at === "now" ? now : nextOccurrence({ hour: Number(r.deliver_at.slice(0, 2)), minute: Number(r.deliver_at.slice(3)) }, user.timezone, now);
-      const blocked = cooldownNotice(u, when);
-      if (blocked) {
+      const ends = cooldownEnds(u);
+      if (ends && when < ends) {
         // One digest a day: a one-off inside the cooldown isn't scheduled.
-        lines.push(blocked);
+        lines.push(`⏳ You get one digest a day, so I can't send one ${r.deliver_at === "now" ? "now" : "at that time"}.`);
       } else {
         await db.updateUser(env.DB, chat_id, { next_digest_at: when.toISOString() });
         u = { ...u, next_digest_at: when.toISOString() };
+        lines.push("✅ Got it.");
       }
     }
-    if (r.skip_today) reply = `👌 Okay, I'll skip your next digest.`;
-    else if (r.summary || r.daily_time || r.deliver_at) {
-      reply = [`✅ Got it${r.summary ? `: <b>${escape(r.summary)}</b>` : ""}.`, ...lines, `Your next digest arrives ${nextDigest(u)}.`].join("\n");
-    } else {
-      reply = "👋 Noted. To change your next digest, tell me the time, the mix or topics, e.g. <i>“45 min, only shorts, something funny, at 9pm”</i>.";
-    }
+    if (changesContent && !r.skip_today && r.summary) lines.push(`✅ For your next digest: <b>${escape(r.summary)}</b>.`);
+    if (!lines.length) lines.push("Tell me a time, the mix or topics to change it, e.g. <i>“45 min, only shorts, something funny, at 9pm”</i>.");
   } catch (e) {
     console.log(`request parse failed: ${(e as Error).message}`);
-    reply = `✅ Got it. I'll use this for your next digest (${nextDigest(user)}).`;
+    await db.addRequest(env.DB, chat_id, text, at); // can't tell what it was: let the digest run read it
+    lines.push("✅ Noted. I'll take this into account for your next digest.");
   }
-  await telegram(env, "sendMessage", { chat_id, text: reply, parse_mode: "HTML" });
+  const next = nextDigestTime(u, now);
+  lines.push(next ? `📺 Next digest: ${nextDigest(u, now)} (${countdown(next, now)}).` : "⏸ Digests are paused. Send /resume to restart.");
+  await telegram(env, "sendMessage", { chat_id, text: lines.join("\n"), parse_mode: "HTML" });
   const fresh = await db.getUser(env.DB, chat_id);
   if (fresh) await refreshStatus(env.DB, (m, p) => telegram(env, m, p), fresh);
 }

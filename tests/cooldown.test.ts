@@ -49,3 +49,9 @@ test("seconds on the clock don't shift the next digest to the next 5-minute mark
   const at = new Date(lagos(9, "08:47").getTime() + 37_000); // 08:47:37
   assert.equal(nextDigestTime(u, at)!.toISOString(), lagos(9, "20:30").toISOString());
 });
+
+test("after-midnight times on the coming night read as 'tonight'", () => {
+  const u = { ...base, delivery_hour: 0, delivery_minute: 30, last_digest_at: lagos(9, "01:17").toISOString() };
+  assert.equal(nextDigest(u, lagos(9, "12:59")), "tonight at 12:30am");
+  assert.equal(nextDigest(u, lagos(9, "02:00")), "tomorrow at 12:30am"); // in the small hours, 'tomorrow' is right
+});

@@ -143,6 +143,8 @@ function dayAndTime(d: Date, u: Schedule, at: Date): string {
   const today = localClock(at, u.timezone).date;
   const tomorrow = localClock(new Date(at.getTime() + 86400_000), u.timezone).date;
   if (local.date === today) return `today at ${time}`;
+  // Small hours of the coming night ("12:30am" seen at 1pm) read as tonight, not tomorrow.
+  if (local.date === tomorrow && local.minutes < 5 * 60 && localClock(at, u.timezone).minutes >= 12 * 60) return `tonight at ${time}`;
   if (local.date === tomorrow) return `tomorrow at ${time}`;
   return `${d.toLocaleDateString("en-GB", { timeZone: u.timezone, weekday: "short" })} at ${time}`;
 }
