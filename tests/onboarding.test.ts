@@ -227,7 +227,15 @@ test("owner-only commands: /invite and /users", async () => {
   await msg("1", "/invite");
   assert.match(lastText(), /https:\/\/t\.me\/test_bot\?start=[\w-]{12}/);
   await msg("1", "/users");
-  assert.match(lastText(), /Ada: active, 1 channels, 07:15 Europe\/London/);
+  assert.match(lastText(), /Ada: active, 1 channels, daily 07:15 Europe\/London, next (today|tomorrow|tonight) at 7:15am/);
+  // A one-off time from a message shows as the next digest, while the daily time stays.
+  const daily = nextDigest((await db.getUser(env.DB, "1"))!);
+  await db.updateUser(env.DB, "1", { next_digest_at: new Date(Date.now() + 2 * 3600_000).toISOString() });
+  const oneOff = nextDigest((await db.getUser(env.DB, "1"))!);
+  assert.notEqual(oneOff, daily);
+  await msg("1", "/users");
+  assert.ok(lastText().includes(`next ${oneOff},`), lastText());
+  await db.updateUser(env.DB, "1", { next_digest_at: null });
 });
 
 test("/delete asks first, then erases everything", async () => {

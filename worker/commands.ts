@@ -90,7 +90,9 @@ export async function handleCommand(ctx: OnboardingCtx, u: db.User, text: string
         (await db.listUsers(ctx.db)).map(async (x) => {
           const st = await db.userState(ctx.db, x.chat_id);
           const cost = await db.costToday(ctx.db, x.chat_id);
-          return `• ${x.name || x.chat_id}: ${x.status}${x.status === "onboarding" ? ` (${x.step})` : ""}, ${st?.creators.length ?? 0} channels, ${at(x)} ${x.timezone}, $${cost.toFixed(2)} today`;
+          // Show the real next digest too: a one-off time from a message ("run it at 2:30pm") overrides the daily one.
+          const next = x.status === "active" ? `, next ${nextDigest(x)}` : "";
+          return `• ${x.name || x.chat_id}: ${x.status}${x.status === "onboarding" ? ` (${x.step})` : ""}, ${st?.creators.length ?? 0} channels, daily ${at(x)} ${x.timezone}${next}, $${cost.toFixed(2)} today`;
         }),
       );
       const last = await db.getState(ctx.db, "last_check");
