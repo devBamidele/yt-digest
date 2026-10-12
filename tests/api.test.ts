@@ -59,8 +59,8 @@ test("unknown users and routes are 404", async () => {
   assert.equal((await call("/api/nope")).status, 404);
 });
 
-test("hourly cron: starts the GitHub run only when someone is due, passing the exact moment", async () => {
-  const { hourly } = await import("../worker/index.ts");
+test("cron check: starts the GitHub run only when someone is due, passing the exact moment", async () => {
+  const { checkDue } = await import("../worker/index.ts");
   const realFetch = globalThis.fetch;
   const dispatched: any[] = [];
   globalThis.fetch = (async (url: string, init: any) => {
@@ -69,10 +69,12 @@ test("hourly cron: starts the GitHub run only when someone is due, passing the e
   }) as any;
   try {
     const e = { ...env, GITHUB_REPO: "me/repo", GH_DISPATCH_TOKEN: "gh" };
-    // User 500 (Lagos, 18:00) already had today's digest in an earlier test; try the next day.
-    assert.equal(await hourly(e, Date.parse("2026-10-10T10:00:00Z")), "nobody due"); // 11:00 Lagos
+    // User 500 (Lagos, 18:00) had a digest the day before. Pin its time: the round-trip test stamps the real
+    // clock, and a cooldown measured from today would make this fixed date look "not due" forever.
+    await env.DB.prepare("UPDATE users SET last_digest_at = ? WHERE chat_id = ?").bind("2026-10-09T17:10:00.000Z", "500").run();
+    assert.equal(await checkDue(e, Date.parse("2026-10-10T10:00:00Z")), "nobody due"); // 11:00 Lagos
     assert.equal(dispatched.length, 0);
-    assert.equal(await hourly(e, Date.parse("2026-10-10T17:00:00Z")), "started run for 1 user(s)"); // 18:00 Lagos
+    assert.equal(await checkDue(e, Date.parse("2026-10-10T17:00:00Z")), "started run for 1 user(s)"); // 18:00 Lagos
     assert.equal(dispatched[0].url, "https://api.github.com/repos/me/repo/actions/workflows/users.yml/dispatches");
     assert.deepEqual(dispatched[0].body, { ref: "main", inputs: { at: "2026-10-10T17:00:00.000Z" } });
   } finally {

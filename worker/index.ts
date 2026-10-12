@@ -234,7 +234,7 @@ async function importSubscriptions(env: Env, url: URL): Promise<void> {
 }
 
 /** Cron (every 5 minutes): if anyone's delivery time has come, start the GitHub run for that exact moment. */
-export async function hourly(env: Env, scheduledTime: number): Promise<string> {
+export async function checkDue(env: Env, scheduledTime: number): Promise<string> {
   const at = new Date(scheduledTime);
   await db.setState(env.DB, "last_check", at.toISOString()); // heartbeat: proves the schedule is running
   const due = await db.dueUsers(env.DB, at);
@@ -260,10 +260,10 @@ export default {
       refreshAll(env.DB, (m, p) => telegram(env, m, p), new Date(event.scheduledTime)).catch((e) => console.log(`status refresh failed: ${e}`)),
     );
     ctx.waitUntil(
-      hourly(env, event.scheduledTime).then(
-        (r) => console.log(`hourly: ${r}`),
+      checkDue(env, event.scheduledTime).then(
+        (r) => console.log(`checkDue: ${r}`),
         async (e) => {
-          console.log(`hourly failed: ${e}`);
+          console.log(`checkDue failed: ${e}`);
           // Don't fail silently: tell the owner, at most once an hour.
           if (await db.claimAlert(env.DB, "dispatch", 55)) {
             await telegram(env, "sendMessage", {

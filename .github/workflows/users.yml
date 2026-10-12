@@ -1,6 +1,6 @@
 name: Digests (v3, per user)
 
-# Started by the receiver's hourly Cloudflare cron when someone's delivery hour has come,
+# Started by the receiver's 5-minute Cloudflare cron when someone's delivery time has come,
 # with `at` = the cron's own timestamp, so a run that starts late still picks the same users.
 on:
   workflow_dispatch:

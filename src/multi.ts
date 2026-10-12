@@ -1,7 +1,7 @@
 // v3 runner: builds and sends the digest for every user who is due (or one user), reading and
 // writing their data through the receiver's private API. Channel feeds and video stats are fetched
 // once and shared; everything else is per user.
-//   npm run digest:users -- --due            (what the hourly schedule runs)
+//   npm run digest:users -- --due            (what the 5-minute schedule runs)
 //   npm run digest:users -- --user <chat_id> [--dry-run] [--no-summaries]
 import { parseArgs } from "node:util";
 import { runAgent } from "./agent.ts";
