@@ -32,6 +32,8 @@ interface Options {
   /** Run output is public (GitHub Actions logs of a public repo): name users "user 1", "user 2"…
    *  and leave out what they asked for, the agent's tool calls and dry-run message text. */
   publicLog?: { label: string };
+  /** Where the run log goes (default logs/<chat_id>). */
+  logDir?: string;
 }
 
 /** One user's digest. Returns a short outcome line for the run summary. */
@@ -113,8 +115,10 @@ export async function runUser(app: AppConfig, store: Store, st: UserState, costT
   const taste = tasteText(st.taste.notes, learned);
   const request = requestForPrompt(tonight);
 
-  // Pick: agent → AI ranking → formula, each falling back to the next.
+  // Pick: agent → AI ranking → formula, each falling back to the next. `pickedBy` is the one that
+  // actually produced the picks, which is what the run log records.
   let sel: Selection | undefined;
+  let pickedBy: Config["mode"] = "formula";
   let intro: string | undefined;
   if (cfg.mode === "agent" && videos.length) {
     const agent = await runAgent({
@@ -141,6 +145,7 @@ export async function runUser(app: AppConfig, store: Store, st: UserState, costT
       const totalSeconds = agent.picked.reduce((a, v) => a + (v.durationSeconds ?? 0), 0);
       const left = budgetSeconds - totalSeconds;
       intro = agent.intro;
+      pickedBy = "agent";
       sel = {
         picked: agent.picked,
         dropped: [],
@@ -167,6 +172,9 @@ export async function runUser(app: AppConfig, store: Store, st: UserState, costT
         }
         pickFrom = blend(short, ratings, cfg).eligible;
         log(`AI ratings: ${short.length - todo.length} cached, ${fresh.ratings.size} new`);
+        // Failed batches don't throw: with no ratings at all, the formula alone did the picking.
+        if (ratings.size) pickedBy = "ai";
+        else log("! no AI ratings; picking by the formula");
       } catch (e) {
         log(`! AI ranking failed (${(e as Error).message}); using the formula`);
       }
@@ -192,7 +200,7 @@ export async function runUser(app: AppConfig, store: Store, st: UserState, costT
   const taps = { up: recent.filter((v) => v.vote === "up").length, down: recent.filter((v) => v.vote === "down").length };
   const messages = formatDigest(sel, picked, cfg.budgetMinutes, day, { intro, request: tonight?.summary || undefined, taps });
 
-  const outcome = `${picked.length} videos, ${fmtDuration(sel.totalSeconds)} of ${cfg.budgetMinutes} min, ~$${cost.toFixed(3)}`;
+  const outcome = `${picked.length} videos (${pickedBy}), ${fmtDuration(sel.totalSeconds)} of ${cfg.budgetMinutes} min, ~$${cost.toFixed(3)}`;
   if (opts.dryRun) {
     log(`dry run: ${outcome}`);
     if (!opts.publicLog) for (const m of messages) console.log(`${m.text.replace(/<[^>]+>/g, "")}${m.video ? "\n[👍] [👎]" : ""}\n---`);
@@ -206,7 +214,10 @@ export async function runUser(app: AppConfig, store: Store, st: UserState, costT
     }
     log(`sent: ${outcome}`);
   }
-  writeRunLog({ ranAt: new Date().toISOString(), user: chat, mode: cfg.mode, tonight, cost, picked, note: sel.note }, `logs/${chat}`);
+  writeRunLog(
+    { ranAt: new Date().toISOString(), user: chat, mode: pickedBy, configuredMode: cfg.mode, tonight, cost, picked, note: sel.note },
+    opts.logDir ?? `logs/${chat}`,
+  );
   return outcome;
 }
 

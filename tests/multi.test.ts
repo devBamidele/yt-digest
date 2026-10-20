@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { loadAppConfig } from "../src/config.ts";
 import { alertIfOutOfCredit, runUser } from "../src/multi.ts";
 import type { UserState } from "../src/store.ts";
@@ -114,4 +117,38 @@ test("out of credit: the digest still goes out, and the owner is alerted once fo
   assert.equal(alerts.length, 1);
   assert.equal(alerts[0].key, "credit");
   assert.match(alerts[0].text, /credit balance is too low/);
+});
+
+// Fake Claude replies: a JSON answer (for jsonCall) or a tool call (for the agent).
+const usage = { input_tokens: 10, output_tokens: 10 };
+const jsonAnswer = (data: object) => () =>
+  Response.json({ id: "m", type: "message", role: "assistant", model: "m", stop_reason: "end_turn", stop_sequence: null, content: [{ type: "text", text: JSON.stringify(data) }], usage });
+const toolCall = (name: string, input: object) => () =>
+  Response.json({ id: "m", type: "message", role: "assistant", model: "m", stop_reason: "tool_use", stop_sequence: null, content: [{ type: "tool_use", id: "t", name, input }], usage });
+const badRequest = () => Response.json({ type: "error", error: { type: "invalid_request_error", message: "bad" } }, { status: 400 });
+
+async function runLog(mode: "agent" | "ai" | "formula", answer: () => Response) {
+  claudeAnswer = answer;
+  const logDir = mkdtempSync(join(tmpdir(), "runlog-"));
+  const { store } = fakeStore();
+  await captureLogs(() => runUser({ ...loadAppConfig(), mode }, store, state(), 0, [v("new", "UCmine")], { dryRun: true, noSummaries: true, logDir }));
+  const [file] = readdirSync(logDir);
+  return JSON.parse(readFileSync(join(logDir, file), "utf8"));
+}
+
+test("run log: the mode that actually picked, not the configured one", async () => {
+  // AI ranking fails without throwing (every batch fails): the formula picked.
+  let log = await runLog("ai", badRequest);
+  assert.deepEqual([log.mode, log.configuredMode], ["formula", "ai"]);
+
+  log = await runLog("ai", jsonAnswer({ ratings: [{ id: "new", fit: 8, reason: "fits" }] }));
+  assert.deepEqual([log.mode, log.configuredMode], ["ai", "ai"]);
+
+  // The agent fails, then AI ranking fails too: still the formula.
+  log = await runLog("agent", badRequest);
+  assert.deepEqual([log.mode, log.configuredMode], ["formula", "agent"]);
+
+  // The agent proposes a small digest, is sent back once, and confirms it by resubmitting.
+  log = await runLog("agent", toolCall("propose_selection", { video_ids: ["new"], reasons: [{ id: "new", why: "fits" }], intro: "Hi" }));
+  assert.deepEqual([log.mode, log.configuredMode], ["agent", "agent"]);
 });
