@@ -66,6 +66,10 @@ export class Store {
   addCost(chatId: string, costUsd: number) {
     return this.call(`users/${chatId}/cost`, { costUsd });
   }
+  /** Telegram message to the owner, sent by the receiver at most once an hour per key. */
+  alertOwner(key: string, text: string) {
+    return this.call("alert", { key, text });
+  }
 
   /** Shared summary cache in the shape summarize() expects. */
   summaryStore() {

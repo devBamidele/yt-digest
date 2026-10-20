@@ -6,6 +6,7 @@
 import { parseArgs } from "node:util";
 import { runAgent } from "./agent.ts";
 import { classify } from "./classify.ts";
+import { CREDIT_ALERT, creditError } from "./claude.ts";
 import { loadAppConfig, type AppConfig } from "./config.ts";
 import { costUsd } from "./cost.ts";
 import { deliver, formatDigest, sendTelegram } from "./deliver.ts";
@@ -209,6 +210,12 @@ export async function runUser(app: AppConfig, store: Store, st: UserState, costT
   return outcome;
 }
 
+/** Tells the owner if any Claude call in this run failed for lack of credit. */
+export async function alertIfOutOfCredit(store: Store) {
+  const err = creditError();
+  if (err) await store.alertOwner("credit", `${CREDIT_ALERT}\n\n${err.slice(0, 300)}`);
+}
+
 async function main() {
   const { values } = parseArgs({
     options: {
@@ -248,6 +255,8 @@ async function main() {
       console.error(`[${publicLog?.label ?? (state.user.name || state.user.chat_id)}] ✗ failed: ${(e as Error).stack ?? e}`);
     }
   }
+  if (creditError()) console.log("! Claude API is out of credit; alerting the owner");
+  await alertIfOutOfCredit(store).catch((e) => console.error(`! couldn't alert the owner: ${(e as Error).message}`));
   if (failures) process.exit(1);
 }
 

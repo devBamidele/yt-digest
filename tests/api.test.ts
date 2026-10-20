@@ -59,6 +59,27 @@ test("unknown users and routes are 404", async () => {
   assert.equal((await call("/api/nope")).status, 404);
 });
 
+test("owner alerts from the digest run: sent to the owner's chat at most once an hour per key", async () => {
+  const realFetch = globalThis.fetch;
+  const sent: any[] = [];
+  globalThis.fetch = (async (url: string, init: any) => {
+    sent.push({ url, body: JSON.parse(init.body) });
+    return Response.json({ ok: true });
+  }) as any;
+  try {
+    env.TELEGRAM_CHAT_ID = "1";
+    const first = (await (await post("/api/alert", { key: "credit", text: "⚠️ out of credit" })).json()) as any;
+    const again = (await (await post("/api/alert", { key: "credit", text: "⚠️ out of credit" })).json()) as any;
+    assert.deepEqual([first.sent, again.sent], [true, false]);
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].url, /\/sendMessage$/);
+    assert.deepEqual(sent[0].body, { chat_id: "1", text: "⚠️ out of credit" });
+    assert.equal((await post("/api/alert", { text: "no key" })).status, 400);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("cron check: starts the GitHub run only when someone is due, passing the exact moment", async () => {
   const { checkDue } = await import("../worker/index.ts");
   const realFetch = globalThis.fetch;

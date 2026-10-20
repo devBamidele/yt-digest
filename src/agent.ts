@@ -3,7 +3,7 @@
 // propose_selection is validated here (budget, per-creator cap, max video length) and rejected
 // selections go back to the agent with the reason. Sending happens in code, never in a tool.
 import Anthropic from "@anthropic-ai/sdk";
-import { claude } from "./claude.ts";
+import { claude, watched } from "./claude.ts";
 import { topComments } from "./fetch.ts";
 import { videoLine } from "./rank.ts";
 import { fmtDuration } from "./select.ts";
@@ -261,17 +261,19 @@ export async function runAgent(opts: {
   let nudged = false;
   try {
     while (!final) {
-      const response = await claude().beta.messages.create({
-        model: cfg.aiModel,
-        max_tokens: 16000,
-        betas: ["server-side-fallback-2026-07-01"],
-        fallbacks: "default",
-        output_config: { effort: "medium" },
-        cache_control: { type: "ephemeral" }, // the growing conversation is re-sent each turn; cache it
-        system,
-        tools: TOOLS.map((t) => ({ ...t, strict: true })),
-        messages,
-      });
+      const response = await watched(
+        claude().beta.messages.create({
+          model: cfg.aiModel,
+          max_tokens: 16000,
+          betas: ["server-side-fallback-2026-07-01"],
+          fallbacks: "default",
+          output_config: { effort: "medium" },
+          cache_control: { type: "ephemeral" }, // the growing conversation is re-sent each turn; cache it
+          system,
+          tools: TOOLS.map((t) => ({ ...t, strict: true })),
+          messages,
+        }),
+      );
       usage.input += response.usage.input_tokens;
       usage.output += response.usage.output_tokens;
       usage.cacheRead += response.usage.cache_read_input_tokens ?? 0;

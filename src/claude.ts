@@ -4,6 +4,30 @@ import Anthropic from "@anthropic-ai/sdk";
 let client: Anthropic | undefined;
 export const claude = () => (client ??= new Anthropic());
 
+/** Out of credit or a billing problem: a 402 billing_error, or the 400 that says the credit balance is too low. */
+export function isCreditError(e: unknown): boolean {
+  if (!(e instanceof Anthropic.APIError)) return false;
+  return e.status === 402 || e.type === "billing_error" || /credit balance/i.test(e.message);
+}
+
+/** What the owner is told when Claude calls fail for lack of credit. */
+export const CREDIT_ALERT =
+  "⚠️ Claude API: out of credit or a billing problem. Digests still go out, but picked by the formula and with descriptions instead of summaries.";
+
+let firstCreditError: string | undefined;
+/** The first out-of-credit error this process hit, if any; the digest run alerts the owner about it. */
+export const creditError = () => firstCreditError;
+
+/** Every Claude call goes through here, so an out-of-credit error is noticed wherever it's caught. */
+export async function watched<T>(call: Promise<T>): Promise<T> {
+  try {
+    return await call;
+  } catch (e) {
+    if (isCreditError(e)) firstCreditError ??= (e as Error).message;
+    throw e;
+  }
+}
+
 export type Effort = "low" | "medium" | "high";
 
 /** Request options per model: Haiku 4.5 takes neither `effort` nor server-side fallbacks. */
@@ -30,13 +54,15 @@ export async function jsonCall<T>(opts: {
   effort?: Effort;
   maxTokens?: number;
 }): Promise<JsonResult<T>> {
-  const response = await claude().beta.messages.create({
-    model: opts.model,
-    max_tokens: opts.maxTokens ?? 8000,
-    ...modelOptions(opts.model, opts.effort ?? "low", { type: "json_schema", schema: opts.schema as Record<string, unknown> }),
-    system: opts.system,
-    messages: [{ role: "user", content: opts.user }],
-  });
+  const response = await watched(
+    claude().beta.messages.create({
+      model: opts.model,
+      max_tokens: opts.maxTokens ?? 8000,
+      ...modelOptions(opts.model, opts.effort ?? "low", { type: "json_schema", schema: opts.schema as Record<string, unknown> }),
+      system: opts.system,
+      messages: [{ role: "user", content: opts.user }],
+    }),
+  );
   if (response.stop_reason !== "end_turn") throw new Error(`Claude stopped early: ${response.stop_reason}`);
   const text = response.content.find((b) => b.type === "text")?.text ?? "";
   return { data: JSON.parse(text) as T, usage: { input: response.usage.input_tokens, output: response.usage.output_tokens } };

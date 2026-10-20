@@ -3,6 +3,7 @@
 // worker replies right away. It runs onboarding for invited users (Google sign-in at /oauth/*),
 // commands and settings, saves votes and requests to D1, serves per-user data to the daily run
 // (/api/*), and every 5 minutes starts the GitHub run for whoever is due.
+import { CREDIT_ALERT, isCreditError } from "../src/claude.ts";
 import { parseRequests } from "../src/request.ts";
 import { handleApi } from "./api.ts";
 import * as db from "./db.ts";
@@ -37,6 +38,13 @@ async function telegram(env: Env, method: string, payload: Record<string, unknow
   const body = await res.json().catch(() => ({}));
   if (!res.ok) console.log(`telegram ${method} failed: ${res.status} ${JSON.stringify(body)}`);
   return body;
+}
+
+/** Telegram message to the owner, at most once an hour per key. True if it was sent. */
+async function alertOwner(env: Env, key: string, text: string): Promise<boolean> {
+  if (!(await db.claimAlert(env.DB, key, 55))) return false;
+  await telegram(env, "sendMessage", { chat_id: env.TELEGRAM_CHAT_ID, text });
+  return true;
 }
 
 const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -128,6 +136,7 @@ async function handleRequest(env: Env, user: db.User, text: string, at: string) 
     if (!lines.length) lines.push("Tell me a time, the mix or topics to change it, e.g. <i>“45 min, only shorts, something funny, at 9pm”</i>.");
   } catch (e) {
     console.log(`request parse failed: ${(e as Error).message}`);
+    if (isCreditError(e)) await alertOwner(env, "credit", `${CREDIT_ALERT}\n\n${(e as Error).message.slice(0, 300)}`);
     await db.addRequest(env.DB, chat_id, text, at); // can't tell what it was: let the digest run read it
     lines.push("✅ Noted. I'll take this into account for your next digest.");
   }
@@ -265,12 +274,7 @@ export default {
         async (e) => {
           console.log(`checkDue failed: ${e}`);
           // Don't fail silently: tell the owner, at most once an hour.
-          if (await db.claimAlert(env.DB, "dispatch", 55)) {
-            await telegram(env, "sendMessage", {
-              chat_id: env.TELEGRAM_CHAT_ID,
-              text: `⚠️ Couldn't start digest runs: ${String((e as Error).message ?? e).slice(0, 300)}`,
-            });
-          }
+          await alertOwner(env, "dispatch", `⚠️ Couldn't start digest runs: ${String((e as Error).message ?? e).slice(0, 300)}`);
         },
       ),
     );
@@ -290,7 +294,7 @@ export default {
       return new Response("ok");
     }
 
-    if (url.pathname.startsWith("/api/")) return handleApi(request, env);
+    if (url.pathname.startsWith("/api/")) return handleApi(request, env, (key, text) => alertOwner(env, key, text));
     if (request.method === "GET" && url.pathname === "/oauth/start") return oauthStart(env, url);
     if (request.method === "GET" && url.pathname === "/oauth/callback") return oauthCallback(env, url, ctx);
 

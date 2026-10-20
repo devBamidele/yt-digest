@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { loadAppConfig } from "../src/config.ts";
-import { runUser } from "../src/multi.ts";
+import { alertIfOutOfCredit, runUser } from "../src/multi.ts";
 import type { UserState } from "../src/store.ts";
 import type { Video } from "../src/types.ts";
 
@@ -18,8 +18,38 @@ const state = (over: Partial<UserState> = {}): UserState => ({
 });
 const fakeStore = () => {
   const calls: string[] = [];
-  return { calls, store: { addCost: async () => void calls.push("addCost"), recordDigest: async () => void calls.push("recordDigest") } as any };
+  const alerts: { key: string; text: string }[] = [];
+  const store = {
+    addCost: async () => void calls.push("addCost"),
+    recordDigest: async () => void calls.push("recordDigest"),
+    saveRatings: async () => void calls.push("saveRatings"),
+    summaryStore: () => ({ get: async () => ({}), put: async () => {} }),
+    alertOwner: async (key: string, text: string) => void alerts.push({ key, text }),
+  };
+  return { calls, alerts, store: store as any };
 };
+
+// Stand-in for the Claude API. The SDK client keeps the fetch it first saw, so install one stand-in
+// up front and switch what it answers.
+process.env.ANTHROPIC_API_KEY ||= "test";
+let claudeAnswer: () => Response = () => new Response("no Claude in this test", { status: 500 });
+const realFetch = globalThis.fetch;
+globalThis.fetch = (async (url: any, init: any) =>
+  String(url).includes("api.anthropic.com") ? claudeAnswer() : realFetch(url, init)) as any;
+const outOfCredit = () =>
+  Response.json({ type: "error", error: { type: "billing_error", message: "Your credit balance is too low to access the Anthropic API." } }, { status: 402 });
+
+async function captureLogs(run: () => Promise<unknown>): Promise<string> {
+  const logs: string[] = [];
+  const orig = console.log;
+  console.log = (s: string) => void logs.push(String(s));
+  try {
+    await run();
+  } finally {
+    console.log = orig;
+  }
+  return logs.join("\n");
+}
 
 test("only this person's channels, never anything already sent; dry runs don't record a digest", async () => {
   const app = { ...loadAppConfig(), mode: "formula" as const };
@@ -70,4 +100,18 @@ test("public run output: users are numbered, and no names, chat ids or message t
   const out = logs.join("\n");
   assert.match(out, /\[user 1\] 1 candidates from 1 channels/);
   assert.doesNotMatch(out, /Ada|123456789|secret-pick/);
+});
+
+test("out of credit: the digest still goes out, and the owner is alerted once for the run", async () => {
+  const app = loadAppConfig(); // mode agent
+  const { store, alerts } = fakeStore();
+  claudeAnswer = outOfCredit;
+  const out = await captureLogs(() =>
+    runUser(app, store, state({ requests: [{ id: 1, text: "30 min", at: "" }] }), 0, [v("new", "UCmine")], { dryRun: true, noSummaries: false }),
+  );
+  assert.match(out, /dry run: 1 videos/);
+  await alertIfOutOfCredit(store);
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].key, "credit");
+  assert.match(alerts[0].text, /credit balance is too low/);
 });

@@ -4,7 +4,11 @@ import * as db from "./db.ts";
 
 const json = (data: unknown, status = 200) => Response.json(data, { status });
 
-export async function handleApi(request: Request, env: { DB: db.D1; EVENTS_TOKEN: string }): Promise<Response> {
+export async function handleApi(
+  request: Request,
+  env: { DB: db.D1; EVENTS_TOKEN: string },
+  alertOwner: (key: string, text: string) => Promise<boolean>,
+): Promise<Response> {
   if (request.headers.get("Authorization") !== `Bearer ${env.EVENTS_TOKEN}`) return json({ ok: false, error: "forbidden" }, 403);
   const url = new URL(request.url);
   const parts = url.pathname.split("/").filter(Boolean); // ["api", ...]
@@ -16,6 +20,12 @@ export async function handleApi(request: Request, env: { DB: db.D1; EVENTS_TOKEN
     const at = url.searchParams.get("at");
     const users = await db.dueUsers(env.DB, at ? new Date(at) : new Date());
     return json({ ok: true, users: users.map((u) => u.chat_id) });
+  }
+
+  // POST /api/alert {key, text} → Telegram to the owner, at most once an hour per key
+  if (request.method === "POST" && parts[1] === "alert") {
+    if (!body.key || !body.text) return json({ ok: false, error: "key and text are required" }, 400);
+    return json({ ok: true, sent: await alertOwner(String(body.key), String(body.text).slice(0, 1000)) });
   }
 
   // /api/summaries/lookup and /api/summaries: shared summary cache

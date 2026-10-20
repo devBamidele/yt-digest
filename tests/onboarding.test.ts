@@ -313,14 +313,17 @@ test("sign-in callback answers the browser at once and imports in the background
 // Stand-in for Claude reading a request. The SDK client keeps the fetch it first saw, so install one
 // stand-in and switch what it returns.
 let claudeParse: object = {};
+let claudeError: (() => Response) | null = null;
 let claudeInstalled = false;
-function fakeClaude(parse: object) {
+function fakeClaude(parse: object, error: (() => Response) | null = null) {
   claudeParse = parse;
+  claudeError = error;
   if (!claudeInstalled) {
     claudeInstalled = true;
     const prev = globalThis.fetch;
     globalThis.fetch = (async (url: any, init: any) => {
       if (String(url).includes("api.anthropic.com")) {
+        if (claudeError) return claudeError();
         return new Response(JSON.stringify({
           id: "msg", type: "message", role: "assistant", model: "m", stop_reason: "end_turn", stop_sequence: null,
           content: [{ type: "text", text: JSON.stringify({ budget_minutes: 0, shorts_share: -1, avoid: [], prefer: [], skip_today: false, deliver_at: "", daily_time: "", summary: "", ...claudeParse }) }],
@@ -359,4 +362,19 @@ test("messages: refused 'send it now' is plain, questions get the time, only con
 
   const stored = (await db.userState(env.DB, "700"))!.requests.map((r: any) => r.text);
   assert.deepEqual(stored, ["only 30 min tonight"]); // not "Send it now", not the question
+});
+
+const outOfCredit = () =>
+  Response.json({ type: "error", error: { type: "billing_error", message: "Your credit balance is too low to access the Anthropic API." } }, { status: 402 });
+
+test("out of credit while reading a message: the owner is alerted, at most once an hour", async () => {
+  await env.DB.prepare("DELETE FROM app_state WHERE key = 'alert:credit'").run();
+  const restore = fakeClaude({}, outOfCredit);
+  sent = [];
+  await msg("700", "only 20 min tonight");
+  await msg("700", "and no shorts");
+  restore();
+  const toOwner = sent.filter((s) => s.method === "sendMessage" && s.body.chat_id === "1");
+  assert.equal(toOwner.length, 1);
+  assert.match(toOwner[0].body.text, /credit balance is too low/);
 });

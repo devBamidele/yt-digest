@@ -1,5 +1,6 @@
 // Step 6: 2-sentence summaries from title + description, cached by video ID so reruns cost nothing.
 import Anthropic from "@anthropic-ai/sdk";
+import { claude, watched } from "./claude.ts";
 import { mapLimit } from "./fetch.ts";
 import { fmtDuration } from "./select.ts";
 import type { Video } from "./types.ts";
@@ -67,13 +68,15 @@ function modelOptions(model: string) {
 }
 
 export async function summarizeOne(client: Anthropic, model: string, v: Video) {
-  const response = await client.beta.messages.create({
-    model,
-    max_tokens: 2000,
-    ...modelOptions(model),
-    system: SYSTEM,
-    messages: [{ role: "user", content: videoPrompt(v) }],
-  });
+  const response = await watched(
+    client.beta.messages.create({
+      model,
+      max_tokens: 2000,
+      ...modelOptions(model),
+      system: SYSTEM,
+      messages: [{ role: "user", content: videoPrompt(v) }],
+    }),
+  );
   const usage = { input: response.usage.input_tokens, output: response.usage.output_tokens };
   if (response.stop_reason !== "end_turn") return { summary: null, usage, why: `stop_reason ${response.stop_reason}` };
   const text = response.content.find((b) => b.type === "text")?.text ?? "";
@@ -101,7 +104,7 @@ export async function summarize(videos: Video[], model: string, log: (s: string)
   stats.cached = videos.length - todo.length;
 
   if (todo.length) {
-    const client = new Anthropic();
+    const client = claude();
     await mapLimit(todo, 5, async (v) => {
       try {
         const r = await summarizeOne(client, model, v);
