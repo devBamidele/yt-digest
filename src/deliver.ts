@@ -70,7 +70,7 @@ export function formatDigest(
   if (extras.intro) blocks.push(`<i>${escapeHtml(extras.intro)}</i>`);
   const notes = [
     extras.request && `🎯 Tonight: ${escapeHtml(extras.request)} (as you asked)`,
-    extras.requestUnread && "⚠️ I couldn't read your message(s) this time, so they weren't applied. I've kept them for your next digest.",
+    extras.requestUnread && "😕 I couldn't read your messages in time for this digest, so they aren't applied here. I've saved them for the next one.",
     extras.taps && extras.taps.up + extras.taps.down && `🙏 Got your feedback: ${extras.taps.up} 👍, ${extras.taps.down} 👎. Thanks!`,
   ].filter(Boolean);
   if (notes.length) blocks.push(notes.join("\n"));

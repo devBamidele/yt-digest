@@ -4,6 +4,7 @@ import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadAppConfig } from "../src/config.ts";
+import { CREDIT_ALERT } from "../src/claude.ts";
 import { costUsd } from "../src/cost.ts";
 import { alertIfOutOfCredit, runUser } from "../src/multi.ts";
 import type { UserState } from "../src/store.ts";
@@ -128,7 +129,8 @@ test("out of credit: the digest still goes out, and the owner is alerted once fo
   await alertIfOutOfCredit(store);
   assert.equal(alerts.length, 1);
   assert.equal(alerts[0].key, "credit");
-  assert.match(alerts[0].text, /credit balance is too low/);
+  assert.equal(alerts[0].text, CREDIT_ALERT); // plain words, no raw API error
+  assert.doesNotMatch(alerts[0].text, /[{}]|request_id/);
 });
 
 // Fake Claude replies: a JSON answer (for jsonCall) or a tool call (for the agent).

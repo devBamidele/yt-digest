@@ -10,9 +10,12 @@ export function isCreditError(e: unknown): boolean {
   return e.status === 402 || e.type === "billing_error" || /credit balance/i.test(e.message);
 }
 
-/** What the owner is told when Claude calls fail for lack of credit. */
-export const CREDIT_ALERT =
-  "⚠️ Claude API: out of credit or a billing problem. Digests still go out, but picked by the formula and with descriptions instead of summaries.";
+/** What the owner is told when Claude calls fail for lack of credit. The raw error stays in the logs. */
+export const CREDIT_ALERT = [
+  "⚠️ The Claude API is out of credit (or has a billing problem).",
+  "Digests still go out, just without AI: videos are picked by the formula and show their descriptions instead of summaries. Messages to the bot can't be read until it's topped up.",
+  "Top up in the Anthropic Console under Plans & Billing.",
+].join("\n\n");
 
 let firstCreditError: string | undefined;
 /** The first out-of-credit error this process hit, if any; the digest run alerts the owner about it. */

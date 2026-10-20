@@ -227,8 +227,7 @@ export async function runUser(app: AppConfig, store: Store, st: UserState, costT
 
 /** Tells the owner if any Claude call in this run failed for lack of credit. */
 export async function alertIfOutOfCredit(store: Store) {
-  const err = creditError();
-  if (err) await store.alertOwner("credit", `${CREDIT_ALERT}\n\n${err.slice(0, 300)}`);
+  if (creditError()) await store.alertOwner("credit", CREDIT_ALERT);
 }
 
 async function main() {
@@ -270,7 +269,7 @@ async function main() {
       console.error(`[${publicLog?.label ?? (state.user.name || state.user.chat_id)}] ✗ failed: ${(e as Error).stack ?? e}`);
     }
   }
-  if (creditError()) console.log("! Claude API is out of credit; alerting the owner");
+  if (creditError()) console.log(`! Claude API is out of credit (${creditError()}); alerting the owner`);
   await alertIfOutOfCredit(store).catch((e) => console.error(`! couldn't alert the owner: ${(e as Error).message}`));
   if (failures) process.exit(1);
 }

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { getPlatformProxy } from "wrangler";
 import worker from "../worker/index.ts";
 import * as db from "../worker/db.ts";
+import { CREDIT_ALERT } from "../src/claude.ts";
 import { costUsd } from "../src/cost.ts";
 import { importedFromGoogle, parseTimezone } from "../worker/onboarding.ts";
 import { isDue, nextDigest, parseTime } from "../worker/time.ts";
@@ -377,7 +378,7 @@ test("out of credit while reading a message: the owner is alerted, at most once 
   restore();
   const toOwner = sent.filter((s) => s.method === "sendMessage" && s.body.chat_id === "1");
   assert.equal(toOwner.length, 1);
-  assert.match(toOwner[0].body.text, /credit balance is too low/);
+  assert.equal(toOwner[0].body.text, CREDIT_ALERT); // plain words, no raw API error
 });
 
 test("a message Claude couldn't read: kept for the digest run, and the reply says nothing was changed", async () => {
@@ -387,7 +388,7 @@ test("a message Claude couldn't read: kept for the digest run, and the reply say
   await msg("700", "only 20 min tonight, at 9pm");
   restore();
   const reply = lastText();
-  assert.match(reply, /^⚠️ I couldn't read that just now, so nothing has changed yet\./);
+  assert.match(reply, /^😕 Sorry, I couldn't read that just now, so nothing has changed yet\.\nI've saved your message/);
   assert.doesNotMatch(reply, /Noted/);
   const stored = (await db.userState(env.DB, "700"))!.requests.map((r: any) => r.text);
   assert.deepEqual(stored, ["only 20 min tonight, at 9pm"]);

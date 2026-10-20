@@ -138,9 +138,11 @@ async function handleRequest(env: Env, user: db.User, text: string, at: string) 
     if (!lines.length) lines.push("Tell me a time, the mix or topics to change it, e.g. <i>“45 min, only shorts, something funny, at 9pm”</i>.");
   } catch (e) {
     console.log(`request parse failed: ${(e as Error).message}`);
-    if (isCreditError(e)) await alertOwner(env, "credit", `${CREDIT_ALERT}\n\n${(e as Error).message.slice(0, 300)}`);
+    if (isCreditError(e)) await alertOwner(env, "credit", CREDIT_ALERT);
     await db.addRequest(env.DB, chat_id, text, at); // can't tell what it was: the digest run tries again
-    lines.push("⚠️ I couldn't read that just now, so nothing has changed yet. I'll try again when I build your next digest; if it was about the time, please send it again later.");
+    lines.push(
+      "😕 Sorry, I couldn't read that just now, so nothing has changed yet.\nI've saved your message and will try it again before your next digest. If you asked for a different time, please send that again a bit later.",
+    );
   }
   const next = nextDigestTime(u, now);
   lines.push(next ? `📺 Next digest: ${nextDigest(u, now)} (${countdown(next, now)}).` : "⏸ Digests are paused. Send /resume to restart.");
