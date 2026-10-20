@@ -54,3 +54,20 @@ test("over twice the daily cap: formula only, no Claude at all", async () => {
   assert.match(out, /over the daily cap .*mode formula/);
   assert.doesNotMatch(out, /request:/); // the request isn't parsed by Claude either
 });
+
+test("public run output: users are numbered, and no names, chat ids or message text appear", async () => {
+  const app = { ...loadAppConfig(), mode: "formula" as const };
+  const { store } = fakeStore();
+  const logs: string[] = [];
+  const orig = console.log;
+  console.log = (s: string) => void logs.push(String(s));
+  try {
+    const st = state({ user: { ...state().user, name: "Ada Lovelace", chat_id: "123456789" } });
+    await runUser(app, store, st, 0, [v("secret-pick", "UCmine")], { dryRun: true, noSummaries: true, publicLog: { label: "user 1" } });
+  } finally {
+    console.log = orig;
+  }
+  const out = logs.join("\n");
+  assert.match(out, /\[user 1\] 1 candidates from 1 channels/);
+  assert.doesNotMatch(out, /Ada|123456789|secret-pick/);
+});

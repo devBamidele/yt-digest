@@ -51,11 +51,3 @@ jobs:
           if [ -n "$ONE_USER" ]; then args+=(--user "$ONE_USER"); else args+=(--due); [ -n "$AT" ] && args+=(--at "$AT"); fi
           [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
           npm run digest:users -- "${args[@]}"
-      - name: Upload run logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logs-${{ github.run_id }}
-          path: logs/
-          retention-days: 90
-          if-no-files-found: ignore

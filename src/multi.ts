@@ -28,13 +28,17 @@ try {
 interface Options {
   dryRun: boolean;
   noSummaries: boolean;
+  /** Run output is public (GitHub Actions logs of a public repo): name users "user 1", "user 2"…
+   *  and leave out what they asked for, the agent's tool calls and dry-run message text. */
+  publicLog?: { label: string };
 }
 
 /** One user's digest. Returns a short outcome line for the run summary. */
 export async function runUser(app: AppConfig, store: Store, st: UserState, costToday: number, pool: Video[], opts: Options): Promise<string> {
   const u = st.user;
   const chat = u.chat_id;
-  const log = (s: string) => console.log(`[${u.name || chat}] ${s}`);
+  const log = (s: string) => console.log(`[${opts.publicLog?.label ?? (u.name || chat)}] ${s}`);
+  const detail = opts.publicLog ? () => {} : log;
   let cost = 0;
 
   // Per-user config: app defaults + this person's settings and channels.
@@ -60,7 +64,7 @@ export async function runUser(app: AppConfig, store: Store, st: UserState, costT
       tonight = await parseRequests(st.requests, cfg.aiModel);
       if (tonight.budget_minutes) cfg.budgetMinutes = tonight.budget_minutes;
       if (tonight.shorts_share >= 0) cfg.shortsRatio = tonight.shorts_share / 100;
-      log(`request: ${tonight.summary || "(nothing actionable)"}`);
+      detail(`request: ${tonight.summary || "(nothing actionable)"}`);
     } catch (e) {
       log(`! couldn't read the request (${(e as Error).message})`);
     }
@@ -118,7 +122,7 @@ export async function runUser(app: AppConfig, store: Store, st: UserState, costT
       taste,
       request,
       dryRun: opts.dryRun,
-      log,
+      log: detail,
       notes: st.agentNotes.map((n) => `${n.at.slice(0, 10)}: ${n.note}`),
       weights,
     });
@@ -190,7 +194,7 @@ export async function runUser(app: AppConfig, store: Store, st: UserState, costT
   const outcome = `${picked.length} videos, ${fmtDuration(sel.totalSeconds)} of ${cfg.budgetMinutes} min, ~$${cost.toFixed(3)}`;
   if (opts.dryRun) {
     log(`dry run: ${outcome}`);
-    for (const m of messages) console.log(`${m.text.replace(/<[^>]+>/g, "")}${m.video ? "\n[👍] [👎]" : ""}\n---`);
+    if (!opts.publicLog) for (const m of messages) console.log(`${m.text.replace(/<[^>]+>/g, "")}${m.video ? "\n[👍] [👎]" : ""}\n---`);
     await finish([]);
   } else {
     const delivered: string[] = [];
@@ -232,13 +236,16 @@ async function main() {
   const pool = classify(await addStats(uploads, () => {}), app.shortsMaxSeconds);
   console.log(`${uploads.length} uploads, ${pool.length} with stats`);
 
+  // Actions logs are public in a public repo: keep names and personal details out of them.
+  const publicRun = process.env.GITHUB_ACTIONS === "true";
   let failures = 0;
-  for (const { state, costToday } of states) {
+  for (const [i, { state, costToday }] of states.entries()) {
+    const publicLog = publicRun ? { label: `user ${i + 1}` } : undefined;
     try {
-      await runUser(app, store, state, costToday, pool, { dryRun: values["dry-run"], noSummaries: values["no-summaries"] });
+      await runUser(app, store, state, costToday, pool, { dryRun: values["dry-run"], noSummaries: values["no-summaries"], publicLog });
     } catch (e) {
       failures++;
-      console.error(`[${state.user.name || state.user.chat_id}] ✗ failed: ${(e as Error).stack ?? e}`);
+      console.error(`[${publicLog?.label ?? (state.user.name || state.user.chat_id)}] ✗ failed: ${(e as Error).stack ?? e}`);
     }
   }
   if (failures) process.exit(1);
