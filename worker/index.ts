@@ -137,8 +137,8 @@ async function handleRequest(env: Env, user: db.User, text: string, at: string) 
   } catch (e) {
     console.log(`request parse failed: ${(e as Error).message}`);
     if (isCreditError(e)) await alertOwner(env, "credit", `${CREDIT_ALERT}\n\n${(e as Error).message.slice(0, 300)}`);
-    await db.addRequest(env.DB, chat_id, text, at); // can't tell what it was: let the digest run read it
-    lines.push("✅ Noted. I'll take this into account for your next digest.");
+    await db.addRequest(env.DB, chat_id, text, at); // can't tell what it was: the digest run tries again
+    lines.push("⚠️ I couldn't read that just now, so nothing has changed yet. I'll try again when I build your next digest; if it was about the time, please send it again later.");
   }
   const next = nextDigestTime(u, now);
   lines.push(next ? `📺 Next digest: ${nextDigest(u, now)} (${countdown(next, now)}).` : "⏸ Digests are paused. Send /resume to restart.");

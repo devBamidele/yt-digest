@@ -22,23 +22,34 @@ const state = (over: Partial<UserState> = {}): UserState => ({
 const fakeStore = () => {
   const calls: string[] = [];
   const alerts: { key: string; text: string }[] = [];
+  const digests: { sentVideoIds: string[]; lastRequestId: number | null; cost: number }[] = [];
   const store = {
     addCost: async () => void calls.push("addCost"),
-    recordDigest: async () => void calls.push("recordDigest"),
+    recordDigest: async (_chat: string, sentVideoIds: string[], lastRequestId: number | null, cost: number) => {
+      calls.push("recordDigest");
+      digests.push({ sentVideoIds, lastRequestId, cost });
+    },
     saveRatings: async () => void calls.push("saveRatings"),
     summaryStore: () => ({ get: async () => ({}), put: async () => {} }),
     alertOwner: async (key: string, text: string) => void alerts.push({ key, text }),
   };
-  return { calls, alerts, store: store as any };
+  return { calls, alerts, digests, store: store as any };
 };
 
-// Stand-in for the Claude API. The SDK client keeps the fetch it first saw, so install one stand-in
-// up front and switch what it answers.
+// Stand-ins for the Claude API and Telegram. The SDK client keeps the fetch it first saw, so install
+// one stand-in up front and switch what it answers.
 process.env.ANTHROPIC_API_KEY ||= "test";
 let claudeAnswer: () => Response = () => new Response("no Claude in this test", { status: 500 });
+const telegramSent: any[] = [];
 const realFetch = globalThis.fetch;
-globalThis.fetch = (async (url: any, init: any) =>
-  String(url).includes("api.anthropic.com") ? claudeAnswer() : realFetch(url, init)) as any;
+globalThis.fetch = (async (url: any, init: any) => {
+  if (String(url).includes("api.anthropic.com")) return claudeAnswer();
+  if (String(url).startsWith("https://api.telegram.org/")) {
+    telegramSent.push(JSON.parse(init.body));
+    return Response.json({ ok: true, result: { message_id: 1 } });
+  }
+  return realFetch(url, init);
+}) as any;
 const outOfCredit = () =>
   Response.json({ type: "error", error: { type: "billing_error", message: "Your credit balance is too low to access the Anthropic API." } }, { status: 402 });
 
@@ -151,4 +162,25 @@ test("run log: the mode that actually picked, not the configured one", async () 
   // The agent proposes a small digest, is sent back once, and confirms it by resubmitting.
   log = await runLog("agent", toolCall("propose_selection", { video_ids: ["new"], reasons: [{ id: "new", why: "fits" }], intro: "Hi" }));
   assert.deepEqual([log.mode, log.configuredMode], ["agent", "agent"]);
+});
+
+test("a request Claude couldn't read isn't used up, and the digest says it wasn't applied", async () => {
+  const app = { ...loadAppConfig(), mode: "formula" as const };
+  const opts = { dryRun: false, noSummaries: true, logDir: mkdtempSync(join(tmpdir(), "runlog-")) };
+  const st = state({ requests: [{ id: 7, text: "only 10 min", at: "" }] });
+
+  let { store, digests } = fakeStore();
+  claudeAnswer = badRequest;
+  telegramSent.length = 0;
+  await captureLogs(() => runUser(app, store, st, 0, [v("new", "UCmine")], opts));
+  assert.equal(digests[0].lastRequestId, null); // kept for the next digest
+  assert.match(telegramSent[0].text, /couldn't read your message/);
+
+  // Read fine: used up, and no warning.
+  ({ store, digests } = fakeStore());
+  claudeAnswer = jsonAnswer({ budget_minutes: 10, shorts_share: -1, avoid: [], prefer: [], skip_today: false, deliver_at: "", daily_time: "", summary: "10 min" });
+  telegramSent.length = 0;
+  await captureLogs(() => runUser(app, store, st, 0, [v("new", "UCmine")], opts));
+  assert.equal(digests[0].lastRequestId, 7);
+  assert.doesNotMatch(telegramSent[0].text, /couldn't read/);
 });

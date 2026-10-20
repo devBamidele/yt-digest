@@ -378,3 +378,16 @@ test("out of credit while reading a message: the owner is alerted, at most once 
   assert.equal(toOwner.length, 1);
   assert.match(toOwner[0].body.text, /credit balance is too low/);
 });
+
+test("a message Claude couldn't read: kept for the digest run, and the reply says nothing was changed", async () => {
+  await env.DB.prepare("DELETE FROM requests WHERE chat_id = '700'").run();
+  const restore = fakeClaude({}, () => Response.json({ type: "error", error: { type: "invalid_request_error", message: "bad" } }, { status: 400 }));
+  sent = [];
+  await msg("700", "only 20 min tonight, at 9pm");
+  restore();
+  const reply = lastText();
+  assert.match(reply, /^⚠️ I couldn't read that just now, so nothing has changed yet\./);
+  assert.doesNotMatch(reply, /Noted/);
+  const stored = (await db.userState(env.DB, "700"))!.requests.map((r: any) => r.text);
+  assert.deepEqual(stored, ["only 20 min tonight, at 9pm"]);
+});

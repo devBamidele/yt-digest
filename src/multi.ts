@@ -61,6 +61,7 @@ export async function runUser(app: AppConfig, store: Store, st: UserState, costT
 
   // Tonight's request (messages since the last digest).
   let tonight: TonightRequest | null = null;
+  let requestUnread = false; // then the messages are kept for the next digest, not used up
   const lastRequestId = st.requests.at(-1)?.id ?? null;
   if (st.requests.length && !hardCapped) {
     try {
@@ -69,7 +70,8 @@ export async function runUser(app: AppConfig, store: Store, st: UserState, costT
       if (tonight.shorts_share >= 0) cfg.shortsRatio = tonight.shorts_share / 100;
       detail(`request: ${tonight.summary || "(nothing actionable)"}`);
     } catch (e) {
-      log(`! couldn't read the request (${(e as Error).message})`);
+      requestUnread = true;
+      log(`! couldn't read the request (${(e as Error).message}); keeping it for next time`);
     }
   }
 
@@ -77,7 +79,7 @@ export async function runUser(app: AppConfig, store: Store, st: UserState, costT
     if (opts.dryRun) {
       if (cost) await store.addCost(chat, cost);
     } else {
-      await store.recordDigest(chat, sentIds, lastRequestId, cost);
+      await store.recordDigest(chat, sentIds, requestUnread ? null : lastRequestId, cost);
     }
   };
 
@@ -198,7 +200,7 @@ export async function runUser(app: AppConfig, store: Store, st: UserState, costT
   const since = u.last_digest_at ? Date.parse(u.last_digest_at) : 0;
   const recent = st.votes.filter((v) => Date.parse(v.at) > since);
   const taps = { up: recent.filter((v) => v.vote === "up").length, down: recent.filter((v) => v.vote === "down").length };
-  const messages = formatDigest(sel, picked, cfg.budgetMinutes, day, { intro, request: tonight?.summary || undefined, taps });
+  const messages = formatDigest(sel, picked, cfg.budgetMinutes, day, { intro, request: tonight?.summary || undefined, requestUnread, taps });
 
   const outcome = `${picked.length} videos (${pickedBy}), ${fmtDuration(sel.totalSeconds)} of ${cfg.budgetMinutes} min, ~$${cost.toFixed(3)}`;
   if (opts.dryRun) {

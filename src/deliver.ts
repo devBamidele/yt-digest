@@ -44,6 +44,7 @@ function item(v: Video, n: number): string {
 export interface HeaderExtras {
   intro?: string; // the agent's one-line overview of tonight
   request?: string; // what it understood from my messages, e.g. "45 min, only shorts"
+  requestUnread?: boolean; // my messages couldn't be read; they're kept for the next digest
   taps?: { up: number; down: number }; // feedback collected since the last digest
 }
 
@@ -69,6 +70,7 @@ export function formatDigest(
   if (extras.intro) blocks.push(`<i>${escapeHtml(extras.intro)}</i>`);
   const notes = [
     extras.request && `🎯 Tonight: ${escapeHtml(extras.request)} (as you asked)`,
+    extras.requestUnread && "⚠️ I couldn't read your message(s) this time, so they weren't applied. I've kept them for your next digest.",
     extras.taps && extras.taps.up + extras.taps.down && `🙏 Got your feedback: ${extras.taps.up} 👍, ${extras.taps.down} 👎. Thanks!`,
   ].filter(Boolean);
   if (notes.length) blocks.push(notes.join("\n"));

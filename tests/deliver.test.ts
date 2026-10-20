@@ -70,6 +70,11 @@ test("header: intro, request and feedback each get their own block; empty kinds 
       "⚡ 30 shorts · 42:30",
     ].join("\n\n"),
   );
+  // A request that couldn't be read gets a warning instead of the request line.
+  assert.match(
+    formatDigest(sel(picked), picked, 45, "d", { requestUnread: true })[0].text,
+    /⚠️ I couldn't read your message\(s\) this time, so they weren't applied\. I've kept them for your next digest\./,
+  );
   // No taps and no request: those lines don't appear at all.
   assert.doesNotMatch(formatDigest(sel(picked), picked, 45, "d", { taps: { up: 0, down: 0 } })[0].text, /Got your feedback|Tonight:/);
 });
