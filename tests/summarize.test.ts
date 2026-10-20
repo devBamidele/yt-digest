@@ -17,7 +17,8 @@ test("prompt carries channel, title, length and description", () => {
   assert.match(videoPrompt(v("  ")), /\(no description\)/);
 });
 
-test("fallback uses the first non-link line of the description", () => {
+test("fallback uses the first non-link line of the description, or the title if there's none", () => {
   assert.equal(fallbackSummary(v("https://sponsor.link\n\nA deep dive into chunking.\nMore")), "A deep dive into chunking.");
-  assert.equal(fallbackSummary(v("")), "(No summary available.)");
+  assert.equal(fallbackSummary(v("")), "Why RAG fails");
+  assert.equal(fallbackSummary(v("  \nhttps://a.link\nhttp://b.link\n")), "Why RAG fails");
 });

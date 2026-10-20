@@ -41,10 +41,11 @@ export function videoPrompt(v: Video): string {
   ].join("\n");
 }
 
-/** Used when Claude can't produce a summary; never cached, so the next run retries. */
+/** Used when Claude can't produce a summary; never cached, so the next run retries. The title
+ *  stands in when the description is empty or only links. */
 export function fallbackSummary(v: Video): string {
   const first = v.description.split(/\n/).map((l) => l.trim()).find((l) => l && !/^https?:\/\//.test(l));
-  return first ? first.slice(0, 200) : "(No summary available.)";
+  return (first ?? v.title).slice(0, 200);
 }
 
 export interface SummaryStats {
