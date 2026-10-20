@@ -4,6 +4,7 @@
 // commands and settings, saves votes and requests to D1, serves per-user data to the daily run
 // (/api/*), and every 5 minutes starts the GitHub run for whoever is due.
 import { CREDIT_ALERT, isCreditError } from "../src/claude.ts";
+import { costUsd } from "../src/cost.ts";
 import { parseRequests } from "../src/request.ts";
 import { handleApi } from "./api.ts";
 import * as db from "./db.ts";
@@ -108,7 +109,8 @@ async function handleRequest(env: Env, user: db.User, text: string, at: string) 
   let u = user;
   try {
     process.env.ANTHROPIC_API_KEY = env.ANTHROPIC_API_KEY;
-    const r = await parseRequests([{ text, at }], env.AI_MODEL, { localNow });
+    const { request: r, usage } = await parseRequests([{ text, at }], env.AI_MODEL, { localNow });
+    await db.addCost(env.DB, chat_id, costUsd(env.AI_MODEL, usage)); // counts toward their daily cap
     const changesContent = r.budget_minutes > 0 || r.shorts_share >= 0 || r.avoid.length > 0 || r.prefer.length > 0 || r.skip_today;
     if (changesContent) await db.addRequest(env.DB, chat_id, text, at); // the digest run reads these
 

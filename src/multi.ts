@@ -65,7 +65,9 @@ export async function runUser(app: AppConfig, store: Store, st: UserState, costT
   const lastRequestId = st.requests.at(-1)?.id ?? null;
   if (st.requests.length && !hardCapped) {
     try {
-      tonight = await parseRequests(st.requests, cfg.aiModel);
+      const r = await parseRequests(st.requests, cfg.aiModel);
+      cost += costUsd(cfg.aiModel, r.usage);
+      tonight = r.request;
       if (tonight.budget_minutes) cfg.budgetMinutes = tonight.budget_minutes;
       if (tonight.shorts_share >= 0) cfg.shortsRatio = tonight.shorts_share / 100;
       detail(`request: ${tonight.summary || "(nothing actionable)"}`);

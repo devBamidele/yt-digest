@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { getPlatformProxy } from "wrangler";
 import worker from "../worker/index.ts";
 import * as db from "../worker/db.ts";
+import { costUsd } from "../src/cost.ts";
 import { importedFromGoogle, parseTimezone } from "../worker/onboarding.ts";
 import { isDue, nextDigest, parseTime } from "../worker/time.ts";
 
@@ -390,4 +391,13 @@ test("a message Claude couldn't read: kept for the digest run, and the reply say
   assert.doesNotMatch(reply, /Noted/);
   const stored = (await db.userState(env.DB, "700"))!.requests.map((r: any) => r.text);
   assert.deepEqual(stored, ["only 20 min tonight, at 9pm"]);
+});
+
+test("reading a message counts toward the person's Claude cost for the day", async () => {
+  const before = await db.costToday(env.DB, "700");
+  const restore = fakeClaude({ budget_minutes: 25, summary: "25 min" });
+  await msg("700", "25 min tonight");
+  restore();
+  const added = (await db.costToday(env.DB, "700")) - before;
+  assert.equal(added.toFixed(9), costUsd("m", { input: 1, output: 1 }).toFixed(9));
 });

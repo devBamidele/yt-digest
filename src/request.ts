@@ -44,21 +44,22 @@ const SCHEMA = {
   additionalProperties: false,
 };
 
+/** The request as settings, plus the call's token usage (it counts toward the person's daily cap). */
 export async function parseRequests(
   messages: { text: string; at: string }[],
   model: string,
   context: { localNow?: string } = {},
-): Promise<TonightRequest> {
+): Promise<{ request: TonightRequest; usage: { input: number; output: number } }> {
   const user = messages.map((m) => `[${m.at}] ${m.text}`).join("\n");
   const now = context.localNow ? `<their_local_time>${context.localNow}</their_local_time>\n` : "";
-  const { data } = await jsonCall<TonightRequest>({ model, system: SYSTEM, user: `${now}<messages>\n${user}\n</messages>`, schema: SCHEMA });
+  const { data, usage } = await jsonCall<TonightRequest>({ model, system: SYSTEM, user: `${now}<messages>\n${user}\n</messages>`, schema: SCHEMA });
   const hhmm = /^([01]\d|2[0-3]):[0-5]\d$/;
   if (data.deliver_at !== "now" && !hhmm.test(data.deliver_at)) data.deliver_at = "";
   if (!hhmm.test(data.daily_time)) data.daily_time = "";
   // Keep the budget sane whatever was typed.
   data.budget_minutes = Math.max(0, Math.min(600, Math.round(data.budget_minutes)));
   data.shorts_share = data.shorts_share < 0 ? -1 : Math.min(100, Math.round(data.shorts_share));
-  return data;
+  return { request: data, usage };
 }
 
 /** The request as instructions for the ranker and the agent. */

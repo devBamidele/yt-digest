@@ -4,6 +4,7 @@ import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadAppConfig } from "../src/config.ts";
+import { costUsd } from "../src/cost.ts";
 import { alertIfOutOfCredit, runUser } from "../src/multi.ts";
 import type { UserState } from "../src/store.ts";
 import type { Video } from "../src/types.ts";
@@ -183,4 +184,13 @@ test("a request Claude couldn't read isn't used up, and the digest says it wasn'
   await captureLogs(() => runUser(app, store, st, 0, [v("new", "UCmine")], opts));
   assert.equal(digests[0].lastRequestId, 7);
   assert.doesNotMatch(telegramSent[0].text, /couldn't read/);
+});
+
+test("reading tonight's request counts toward the day's Claude cost", async () => {
+  const app = { ...loadAppConfig(), mode: "formula" as const };
+  const { store, digests } = fakeStore();
+  claudeAnswer = jsonAnswer({ budget_minutes: 10, shorts_share: -1, avoid: [], prefer: [], skip_today: false, deliver_at: "", daily_time: "", summary: "10 min" });
+  const st = state({ requests: [{ id: 7, text: "only 10 min", at: "" }] });
+  await captureLogs(() => runUser(app, store, st, 0, [v("new", "UCmine")], { dryRun: false, noSummaries: true, logDir: mkdtempSync(join(tmpdir(), "runlog-")) }));
+  assert.equal(digests[0].cost, costUsd(app.aiModel, { input: 10, output: 10 }));
 });
