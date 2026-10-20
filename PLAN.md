@@ -22,8 +22,8 @@ Every day at 18:00 WAT (17:00 UTC), send one Telegram message with the best new 
 | Budget honesty | If there isn't enough content to fill the budget, the digest says so (e.g. "Only 39 min of new content today"). |
 | Summaries | From title + description only (no transcripts). Claude Sonnet 5.5 (`summary_model`), 2 sentences, structured JSON output, cached by video ID + prompt version. Chosen by `eval:summaries` on 10 videos: Sonnet 5.5 beat Opus 5.5 (fewer made-up claims, half the cost) and Haiku 4.5 (7/10 had made-up claims). |
 | Delivery | Telegram bot |
-| Scheduling | GitHub Actions cron `0 17 * * *`. Secrets as repo secrets → env vars. |
-| State | `state/` (summary cache, memory.json, Telegram offset) and `logs/` are committed back to the repo by the workflow after each run |
+| Scheduling | GitHub Actions cron `0 17 * * *`. Secrets as repo secrets → env vars. **Replaced in v3:** a Cloudflare cron every 5 minutes starts the GitHub run (section 10). |
+| State | `state/` (summary cache, memory.json, Telegram offset) and `logs/` are committed back to the repo by the workflow after each run. **Replaced in v3:** state lives in Cloudflare D1; `logs/` stays local and is gitignored. |
 | RSS fetching | At most 10 feeds in parallel, so 100+ creators don't hammer YouTube |
 | Telegram input | Always-on Cloudflare Worker (`worker/`, `npm run worker:deploy`) receives every message and tap via webhook, stores it in KV for 30 days, answers taps instantly and replies to requests with what Claude understood. GitHub runs read stored updates from its `/events` endpoint (EVENTS_URL / EVENTS_TOKEN). Without those, they fall back to Telegram `getUpdates`. **Replaced in v3:** no KV, `/events` or `getUpdates`; the webhook writes straight to D1 and runs read it through `/api/*` (section 10). |
 
@@ -109,9 +109,9 @@ Each run writes `logs/YYYY-MM-DD.json`: config used, everything fetched, every s
 | Part | What it does | Where |
 |---|---|---|
 | Taste profile | Claude writes Likes / Dislikes / Tentative from my 👍/👎 (titles looked up from YouTube). "My notes" is mine and never rewritten. Rebuilt when ≥3 new votes arrive. | `src/taste.ts`, `state/taste.md`, `npm run taste` |
-| AI ranking (`ai`) | Claude rates the formula's top 120 against the profile and tonight's request (0–10, with a reason). Score = 0.7 × fit + 0.3 × formula percentile; fit < 4 is dropped. Ratings cached until the profile/request changes. Falls back to the formula on failure. | `src/rank.ts`, `state/ratings.json` |
+| AI ranking (`ai`) | Claude rates the formula's top 120 against the profile and tonight's request (0–10, with a reason). Score = 0.7 × fit + 0.3 × formula percentile; fit < 4 is dropped. Ratings cached until the profile/request changes. Falls back to the formula on failure: a failed batch doesn't throw, its videos just go unrated, and the run log's `mode` says `formula` when no ratings came back at all. | `src/rank.ts`, `state/ratings.json` |
 | Tonight's request | Messages to the bot during the day ("30 min tonight, mostly shorts, no money stuff") → tonight-only budget, shorts/long mix ("no shorts" and "only shorts" are strict), avoid/prefer topics, or skip. creators.yaml values are just the defaults. Parsed by Claude at the next run; `--budget` still wins. | `src/request.ts` |
-| Agent (`agent`) | Manual tool-use loop (no framework). Tools: get_new_uploads, get_stats, get_top_comments, read_memory, write_memory, propose_selection, skip_today. Capped at `agent_max_tool_calls` (20); every call logged in the run log. | `src/agent.ts`, `state/agent-notes.md` |
+| Agent (`agent`) | Manual tool-use loop (no framework). Tools: get_new_uploads, get_stats, get_top_comments, read_memory, write_memory, propose_selection, skip_today. Capped at `agent_max_tool_calls` (20). Every tool call is printed in the run's output (left out of public GitHub Actions logs) but not saved in the run log file. | `src/agent.ts`, `state/agent-notes.md` |
 
 Rules stay in code: `propose_selection` is validated (budget, per-creator cap, per-video length, shorts mix within 15%; a selection under 80% of the budget is sent back once and accepted if resubmitted unchanged) and rejected with the reason so the agent can fix it; the budget is asserted again before sending. The agent never sends messages itself (deliberate change from the original send_message tool). If the agent fails (refusal, tool-call cap, error) the run falls back to AI ranking.
 
@@ -152,9 +152,9 @@ Decisions: invite-only for me + up to ~5 friends; I pay for Claude with a per-us
 | State | JSON/markdown files in `state/`, committed to the repo | **Cloudflare D1** (SQL) next to the receiver; nothing personal in git |
 | Telegram | Receiver only accepts my chat | Receiver serves any **invited** chat; everyone else gets "this bot is invite-only" |
 | Onboarding | I edit files and run scripts | Guided in the bot (below) |
-| Schedule | GitHub cron at 17:00 UTC (late or skipped) | **Cloudflare cron, hourly on the dot** → starts the GitHub run with the users due that hour |
+| Schedule | GitHub cron at 17:00 UTC (late or skipped) | **Cloudflare cron**, planned hourly, now **every 5 minutes** (delivery times are on a 5-minute grid) → starts the GitHub run with the users due at that moment |
 | Pipeline | One user, reads/writes files | Same code, per user, reading/writing through the receiver's private API. Channel feeds and summaries are fetched/generated **once** and shared |
-| Costs | Uncapped | Per-user daily Claude cap; past it: AI ranking with a cheaper model, then formula only. Owner exempt |
+| Costs | Uncapped | Per-user daily Claude cap; past it: AI ranking with a cheaper model, then formula only. Owner exempt. Every Claude call's estimated cost counts, including the bot reading each message. If Claude is out of credit, the owner gets a Telegram alert (at most hourly) |
 
 ### Config
 `creators.yaml` is removed. Channel lists and personal settings (watch time, shorts mix, delivery time, time zone) live per user in D1: channels come from each person's YouTube (onboarding and `/sync`), settings from buttons (`/settings`). A small `config.yaml` keeps only app-wide defaults (models, per-creator cap, length limits, per-user cost cap). Manual per-channel `priority_weight` goes away; 👍/👎 does that job per person.
@@ -176,7 +176,7 @@ Commands after: `/settings`, `/sync` (re-import subscriptions), `/pause` / `/res
 1. D1 schema + data layer + receiver API (`/api/...`, bearer-token protected).
 2. Onboarding state machine + Google web sign-in + CSV fallback; test end to end with me.
 3. Pipeline per user via the API; shared feed fetch and summary cache; per-user caps.
-4. Cloudflare hourly cron → GitHub `workflow_dispatch` with the due users; GitHub's own cron removed.
+4. Cloudflare cron (hourly at first, every 5 minutes since `1f5af87`) → GitHub `workflow_dispatch` with the due users; GitHub's own cron removed.
 5. Commands (`/settings`, `/sync`, `/pause`, `/delete`, `/invite`, `/users`).
 6. **Full wipe** (decided 2026-10-08): delete state/ (votes, taste, requests, sent history, caches), the receiver's stored updates and local logs; keep `evals/fixtures/` (test data). Then onboard me through the bot like any new user, then invite friends.
 
